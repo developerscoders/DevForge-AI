@@ -1,0 +1,83 @@
+@import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: "Anton", sans-serif;
+  
+  --color-brand-bg: #050505;
+  --color-brand-fg: #ffffff;
+  --color-brand-accent-v: #8b5cf6;
+  --color-brand-accent-c: #06b6d4;
+  --color-brand-card: #111111;
+  --color-brand-border: #222222;
+}
+
+/* Custom "Bold Typography" utilities & styles */
+.massive-type {
+  font-family: 'Anton', sans-serif;
+  text-transform: uppercase;
+  line-height: 0.85;
+  letter-spacing: -0.02em;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(10px);
+  border: 1px solid #222222;
+  border-radius: 12px;
+}
+
+.stat-value {
+  font-weight: 800;
+  font-size: 3.5rem;
+  letter-spacing: -0.05em;
+  font-family: 'Inter', sans-serif;
+}
+
+.label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #777777;
+  font-weight: 600;
+}
+
+.plan-card {
+  position: relative;
+  transition: all 0.3s ease;
+  border: 1px solid #222222;
+  background-color: #111111;
+}
+
+.plan-card.active {
+  border-color: #8b5cf6;
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.1) 0%, transparent 100%);
+}
+
+/* Modern minimalist aesthetic details */
+body {
+  background-color: #050505 !important;
+  color: #ffffff !important;
+  font-family: "Inter", sans-serif;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+}
+
+/* Scrollbar customization */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #050505;
+}
+::-webkit-scrollbar-thumb {
+  background: #222222;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #8b5cf6;
+}

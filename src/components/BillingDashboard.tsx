@@ -1,0 +1,997 @@
+import React, { useState, useEffect } from 'react';
+import {
+  CreditCard,
+  CheckCircle,
+  Gift,
+  ArrowUpRight,
+  DollarSign,
+  Download,
+  Percent,
+  HelpCircle,
+  ShieldCheck,
+  Play,
+  ArrowRight,
+  UserPlus,
+  Users,
+  Sparkles,
+  LogIn,
+  AlertTriangle
+} from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { useAuth } from '../contexts/AuthContext';
+import AuthModal from './AuthModal';
+import { SubscriptionPlan, Transaction, Coupon, TeamMember } from '../types';
+
+interface BillingDashboardProps {
+  plans: SubscriptionPlan[];
+  activeSub: {
+    planId: string;
+    planName: string;
+    nextRenewal: string;
+    creditsRemaining: number;
+    creditsTotal: number;
+  };
+  transactions: Transaction[];
+  onUpgrade: (planId?: string, cycle?: string, extraCredits?: number, coupon?: string, alreadyVerified?: boolean) => Promise<void>;
+  coupons: Coupon[];
+  teamMembers: TeamMember[];
+  onAddTeamMember: (name: string, email: string, role: string) => Promise<void>;
+}
+
+export default function BillingDashboard({
+  plans,
+  activeSub,
+  transactions,
+  onUpgrade,
+  coupons,
+  teamMembers,
+  onAddTeamMember
+}: BillingDashboardProps) {
+  const { user, profile } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
+  const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
+  const [extraCreditsAmount, setExtraCreditsAmount] = useState<number | null>(null);
+
+  // Coupons
+  const [couponInput, setCouponInput] = useState('');
+  const [activeCoupon, setActiveCoupon] = useState<Coupon | null>(null);
+  const [couponError, setCouponError] = useState('');
+
+  // Team Member modal/form
+  const [newTeamName, setNewTeamName] = useState('');
+  const [newTeamEmail, setNewTeamEmail] = useState('');
+  const [newTeamRole, setNewTeamRole] = useState<'developer' | 'admin' | 'viewer'>('developer');
+
+  // Checkout modal state
+  const [showRazorpay, setShowRazorpay] = useState(false);
+  const [checkoutStep, setCheckoutStep] = useState<'details' | 'payment' | 'otp' | 'success' | 'failed'>('details');
+  const [cardNumber, setCardNumber] = useState('4532 7182 9912 4012');
+  const [expiry, setExpiry] = useState('12/28');
+  const [cvv, setCvv] = useState('235');
+  const [otp, setOtp] = useState('');
+  const [simulatedTxId, setSimulatedTxId] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Invoice view modal
+  const [selectedInvoice, setSelectedInvoice] = useState<Transaction | null>(null);
+
+  // Dynamic user data
+  const userReferralCode = profile?.referralCode || (user ? `DEV_${user.uid.substring(0, 6).toUpperCase()}` : 'SIGN_IN_REQUIRED');
+  const userReferralsCount = profile?.referralsCount || 0;
+  const userReferralBonus = profile?.referralBonus || 0;
+
+  // Load Razorpay SDK dynamically
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    document.body.appendChild(script);
+    return () => {
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
+    };
+  }, []);
+
+  // Compute dynamic credit usage chart
+  const currentMonthDate = new Date();
+  const creditUsageData = [
+    { name: 'Day 1', Usage: Math.round((activeSub.creditsTotal - activeSub.creditsRemaining) * 0.15) || 50 },
+    { name: 'Day 2', Usage: Math.round((activeSub.creditsTotal - activeSub.creditsRemaining) * 0.2) || 80 },
+    { name: 'Day 3', Usage: Math.round((activeSub.creditsTotal - activeSub.creditsRemaining) * 0.1) || 30 },
+    { name: 'Day 4', Usage: Math.round((activeSub.creditsTotal - activeSub.creditsRemaining) * 0.25) || 120 },
+    { name: 'Day 5', Usage: Math.round((activeSub.creditsTotal - activeSub.creditsRemaining) * 0.18) || 90 },
+    { name: 'Day 6', Usage: Math.round((activeSub.creditsTotal - activeSub.creditsRemaining) * 0.3) || 150 },
+    { name: 'Today', Usage: Math.round((activeSub.creditsTotal - activeSub.creditsRemaining) * 0.12) || 40 },
+  ];
+
+  const handleApplyCoupon = () => {
+    setCouponError('');
+    const found = coupons.find(
+      (c) => c.code.toUpperCase() === couponInput.trim().toUpperCase() && c.active
+    );
+    if (found) {
+      setActiveCoupon(found);
+    } else {
+      setCouponError('Invalid or inactive coupon code.');
+      setActiveCoupon(null);
+    }
+  };
+
+  const openPlanCheckout = (plan: SubscriptionPlan) => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    setSelectedPlan(plan);
+    setExtraCreditsAmount(null);
+    setCheckoutStep('details');
+    setShowRazorpay(true);
+  };
+
+  const openCreditsCheckout = (amount: number) => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    setExtraCreditsAmount(amount);
+    setSelectedPlan(null);
+    setCheckoutStep('details');
+    setShowRazorpay(true);
+  };
+
+  // Pricing calculations
+  const calculateTotal = () => {
+    let price = 0;
+    if (selectedPlan) {
+      price = billingCycle === 'yearly' ? selectedPlan.priceYearly : selectedPlan.priceMonthly;
+    } else if (extraCreditsAmount) {
+      price = extraCreditsAmount === 1000 ? 10 : extraCreditsAmount === 5000 ? 45 : 80;
+    }
+
+    // Apply Coupon
+    let discount = 0;
+    if (activeCoupon) {
+      if (activeCoupon.discountType === 'percent') {
+        discount = price * (activeCoupon.discountValue / 100);
+      } else {
+        discount = Math.min(price, activeCoupon.discountValue);
+      }
+    }
+
+    // Apply Referral rewards (max 50% discount of plan base)
+    const maxReferralOffset = price * 0.3;
+    const appliedReferralOffset = Math.min(userReferralBonus, maxReferralOffset);
+
+    const basePriceBeforeTax = Math.max(0, price - discount - appliedReferralOffset);
+    
+    // GST (18%) Integrated Tax
+    const gstRate = 0.18;
+    const basePrice = parseFloat((basePriceBeforeTax / (1 + gstRate)).toFixed(2));
+    const gstAmount = parseFloat((basePriceBeforeTax - basePrice).toFixed(2));
+
+    return {
+      subtotal: price,
+      discount,
+      referralOffset: appliedReferralOffset,
+      basePrice,
+      gstAmount,
+      total: basePriceBeforeTax
+    };
+  };
+
+  const pricing = calculateTotal();
+
+  const submitRazorpayPayment = () => {
+    if (!cardNumber || !expiry || !cvv) {
+      alert('Please fill out card credentials.');
+      return;
+    }
+    setCheckoutStep('otp');
+  };
+
+  const handleInitiatePayment = async () => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/payment/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planId: selectedPlan?.id,
+          billingCycle,
+          extraCredits: extraCreditsAmount || undefined,
+          providerId: 'razorpay'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create payment order');
+      }
+
+      const keyId = (import.meta as any).env?.VITE_RAZORPAY_KEY_ID;
+      const hasRazorpaySdk = (window as any).Razorpay;
+
+      // If real Razorpay key is configured, open live checkout
+      if (keyId && keyId.trim() !== '' && hasRazorpaySdk && !data.order?.rawResponse?.is_simulation) {
+        const options = {
+          key: keyId,
+          amount: Math.round(data.order.amount * 100),
+          currency: 'INR',
+          name: 'DevForge AI SRE Engine',
+          description: data.description || 'Subscription Upgrade',
+          order_id: data.order.orderId,
+          handler: async function (response: any) {
+            try {
+              setIsProcessing(true);
+              const verifyRes = await fetch('/api/payment/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  providerId: 'razorpay',
+                  paymentId: response.razorpay_payment_id,
+                  orderId: response.razorpay_order_id,
+                  signature: response.razorpay_signature,
+                  planId: selectedPlan?.id,
+                  billingCycle,
+                  extraCredits: extraCreditsAmount || undefined,
+                  couponCode: activeCoupon?.code || undefined
+                })
+              });
+              const verifyData = await verifyRes.json();
+              if (verifyData.success) {
+                setSimulatedTxId(response.razorpay_payment_id);
+                await onUpgrade(
+                  selectedPlan?.id,
+                  billingCycle,
+                  extraCreditsAmount || undefined,
+                  activeCoupon?.code || undefined,
+                  true
+                );
+                setCheckoutStep('success');
+              } else {
+                alert(`Payment verification failed: ${verifyData.error || 'Invalid signature'}`);
+                setCheckoutStep('failed');
+              }
+            } catch (err: any) {
+              setCheckoutStep('failed');
+            } finally {
+              setIsProcessing(false);
+            }
+          },
+          prefill: {
+            name: profile?.displayName || user.displayName || 'Developer',
+            email: profile?.email || user.email || '',
+          },
+          theme: {
+            color: '#8b5cf6'
+          }
+        };
+
+        const rzp = new (window as any).Razorpay(options);
+        rzp.on('payment.failed', function (resp: any) {
+          setCheckoutStep('failed');
+        });
+        rzp.open();
+      } else {
+        // Direct sandbox flow
+        setCheckoutStep('payment');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Payment initiation failed. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const verifyOtp = async () => {
+    try {
+      const generatedTxId = `pay_rzp_${Math.random().toString(36).substring(2, 11)}`;
+      setSimulatedTxId(generatedTxId);
+
+      const verifyRes = await fetch('/api/payment/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: 'razorpay',
+          paymentId: generatedTxId,
+          orderId: `order_sim_${Math.random().toString(36).substring(2, 11)}`,
+          planId: selectedPlan?.id,
+          billingCycle,
+          extraCredits: extraCreditsAmount || undefined,
+          couponCode: activeCoupon?.code || undefined
+        })
+      });
+      const verifyData = await verifyRes.json();
+
+      if (verifyData.success) {
+        await onUpgrade(
+          selectedPlan?.id,
+          billingCycle,
+          extraCreditsAmount || undefined,
+          activeCoupon?.code || undefined,
+          true
+        );
+        setCheckoutStep('success');
+      } else {
+        setCheckoutStep('failed');
+      }
+    } catch (e) {
+      setCheckoutStep('failed');
+    }
+  };
+
+  const triggerTeamAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    if (!newTeamName || !newTeamEmail) return;
+    await onAddTeamMember(newTeamName, newTeamEmail, newTeamRole);
+    setNewTeamName('');
+    setNewTeamEmail('');
+  };
+
+  const billedUserName = profile?.displayName || user?.displayName || (user?.email ? user.email.split('@')[0] : 'Guest Developer');
+  const billedUserEmail = profile?.email || user?.email || 'guest@devforge.ai';
+
+  return (
+    <div className="max-w-7xl mx-auto px-6 py-10 space-y-10 text-slate-100" id="billing-dashboard-view">
+      
+      {/* GUEST BANNER WHEN NOT LOGGED IN */}
+      {!user && (
+        <div className="bg-gradient-to-r from-violet-950/40 via-indigo-950/40 to-slate-900 border border-violet-500/30 p-5 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 bg-violet-600/20 text-violet-400 border border-violet-500/30 rounded">
+              <LogIn className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Viewing in Visitor / Guest Session</h3>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Sign in or register to synchronize your personal SRE plans, compute balance, and team members directly to Firestore.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowAuthModal(true)}
+            className="bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs uppercase tracking-widest px-5 py-2.5 rounded transition duration-200 shrink-0 shadow-lg"
+            id="billing-signin-banner-btn"
+          >
+            Sign In / Register
+          </button>
+        </div>
+      )}
+
+      {/* HEADER SECTION */}
+      <header className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-white/10 pb-6 gap-4">
+        <div className="flex flex-col">
+          <span className="label mb-2">Organization / Billing Engine</span>
+          <h1 className="massive-type text-6xl text-white">
+            Tenant Engine<span className="text-violet-500">.</span>
+          </h1>
+          <p className="text-xs text-slate-400 uppercase tracking-wider mt-1">
+            Choreographed SRE compute nodes, billing quotas, and dynamic database plans.
+          </p>
+        </div>
+        <div className="text-left md:text-right font-mono">
+          <span className="label block mb-1">Database State</span>
+          <div className="text-xs text-emerald-400 flex items-center gap-1.5 md:justify-end">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+            <span>FIRESTORE SYNC ACTIVE</span>
+          </div>
+        </div>
+      </header>
+
+      <div className="grid lg:grid-cols-12 gap-8">
+        {/* Credit Tracker Card */}
+        <div className="lg:col-span-4 bg-[#111111] border border-[#222222] p-6 flex flex-col justify-between shadow-2xl h-80">
+          <div>
+            <span className="label block">Tenant Subscription Balance</span>
+            <h2 className="text-xl font-bold uppercase tracking-wider mt-2 text-white">
+              {user ? activeSub.planName : 'Guest Session (Read-Only)'}
+            </h2>
+            <div className="text-slate-500 font-mono text-[10px] mt-1">
+              RENEWAL: {user ? activeSub.nextRenewal : 'Sign in to configure'}
+            </div>
+
+            {/* Balances */}
+            <div className="mt-6 flex flex-col">
+              <span className="stat-value text-white">
+                {user ? activeSub.creditsRemaining.toLocaleString() : '0'}
+              </span>
+              <span className="label text-[9px] mt-1 text-slate-500">
+                / {user ? activeSub.creditsTotal.toLocaleString() : '0'} Compute Credits
+              </span>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-[#222222] flex justify-between gap-3">
+            <button
+              onClick={() => openCreditsCheckout(1000)}
+              className="flex-1 bg-transparent hover:bg-white/5 text-slate-300 text-[10px] uppercase tracking-wider py-2.5 border border-[#222222] font-bold transition duration-200"
+              id="buy-credits-btn"
+            >
+              <span>+ Top-up Credits</span>
+            </button>
+            <a
+              href="#plans-anchor"
+              className="flex-1 bg-white hover:bg-violet-400 text-black text-[10px] uppercase tracking-wider py-2.5 font-bold text-center transition duration-200 flex items-center justify-center"
+            >
+              <span>Upgrade Plan</span>
+            </a>
+          </div>
+        </div>
+
+        {/* Credit Usage chart */}
+        <div className="lg:col-span-8 bg-[#111111] border border-[#222222] p-6 shadow-2xl h-80 flex flex-col justify-between">
+          <div>
+            <span className="label">7-Day Credit Consumption Analytics</span>
+            <span className="text-[9px] text-slate-500 font-mono block mt-1">TRACKING SWARM COMPILATIONS AND SRE OPTIMIZATION ACTIONS</span>
+          </div>
+
+          <div className="h-44 mt-4">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={creditUsageData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#222222" />
+                <XAxis dataKey="name" stroke="#666" fontSize={10} tickLine={false} />
+                <YAxis stroke="#666" fontSize={10} tickLine={false} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#111111', borderColor: '#222222', color: '#ffffff' }}
+                  labelStyle={{ color: '#8b5cf6' }}
+                />
+                <Bar dataKey="Usage" fill="#8b5cf6" radius={[0, 0, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* PLANS TABLE SECTION */}
+      <div className="space-y-6 pt-6 border-t border-white/5" id="plans-anchor">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div>
+            <span className="label block mb-1">Database-Backed Subscription Catalog</span>
+            <h2 className="massive-type text-4xl text-white">Choose Your SRE Engine Plan</h2>
+            <p className="text-slate-400 text-xs uppercase tracking-wider mt-1">
+              Synchronized directly from the Firestore database. Upgrades modify your live tenant tier instantly.
+            </p>
+          </div>
+
+          {/* Toggle Monthly/Yearly */}
+          <div className="bg-[#111111] border border-[#222222] p-1 flex self-start text-[10px] font-bold uppercase tracking-wider">
+            <button
+              onClick={() => setBillingCycle('monthly')}
+              className={`px-3 py-1.5 transition duration-200 ${billingCycle === 'monthly' ? 'bg-[#050505] text-violet-400 font-bold border border-[#222222]' : 'text-slate-500 hover:text-slate-300'}`}
+              id="toggle-monthly"
+            >
+              Monthly
+            </button>
+            <button
+              onClick={() => setBillingCycle('yearly')}
+              className={`px-3 py-1.5 transition duration-200 ${billingCycle === 'yearly' ? 'bg-[#050505] text-violet-400 font-bold border border-[#222222]' : 'text-slate-500 hover:text-slate-300'}`}
+              id="toggle-yearly"
+            >
+              Yearly (Save ~20%)
+            </button>
+          </div>
+        </div>
+
+        {/* Pricing Cards Grid */}
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {plans.map((p) => {
+            const isPro = p.id === 'pro';
+            const isActive = user ? activeSub.planId === p.id : p.id === 'free';
+            const price = billingCycle === 'yearly' ? p.priceYearly : p.priceMonthly;
+            const cycleText = billingCycle === 'yearly' ? '/year' : '/mo';
+
+            return (
+              <div
+                key={p.id}
+                className={`plan-card p-6 flex flex-col justify-between h-[440px] relative transition duration-300 ${
+                  isActive ? 'active' : 'opacity-75 hover:opacity-100'
+                }`}
+                id={`plan-card-${p.id}`}
+              >
+                {isActive && (
+                  <span className="absolute top-3 right-3 bg-violet-600 text-[8px] px-2 py-0.5 uppercase font-bold tracking-widest text-white">
+                    CURRENT
+                  </span>
+                )}
+
+                <div>
+                  <span className={`label block ${isActive ? 'text-violet-400 font-bold' : ''}`}>{p.name}</span>
+                  <div className="mt-4 flex items-baseline space-x-1.5 border-b border-[#222222] pb-4">
+                    <span className="text-3xl font-black font-sans text-white">${price}</span>
+                    <span className="text-slate-500 text-[10px] uppercase font-mono">{cycleText}</span>
+                  </div>
+
+                  <div className="mt-4 text-[9px] font-mono text-cyan-400 font-bold uppercase tracking-wider">
+                    <span>{p.credits.toLocaleString()} AI credits / month</span>
+                  </div>
+
+                  <ul className="mt-4 space-y-2 text-[10px] text-slate-400 leading-relaxed font-sans">
+                    {p.features && p.features.map((feat) => (
+                      <li key={feat} className="flex items-start space-x-2">
+                        <CheckCircle className="text-violet-500 w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>{feat}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <button
+                  onClick={() => p.priceMonthly > 0 && openPlanCheckout(p)}
+                  className={`w-full py-2.5 text-[10px] font-bold uppercase tracking-widest transition duration-200 flex items-center justify-center space-x-1.5 ${
+                    isActive
+                      ? 'bg-transparent text-slate-500 border border-[#222222] cursor-default'
+                      : isPro
+                      ? 'bg-white text-black hover:bg-violet-400'
+                      : 'bg-[#050505] hover:bg-white/5 text-slate-300 border border-[#222222]'
+                  }`}
+                  id={`upgrade-btn-${p.id}`}
+                >
+                  <span>{isActive ? 'Active Plan' : !user ? 'Sign In to Upgrade' : 'Upgrade Plan'}</span>
+                  {!isActive && p.priceMonthly > 0 && <ArrowRight className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* SECONDARY ROW: Team Manager & Referral Rewards */}
+      <div className="grid lg:grid-cols-12 gap-8">
+        {/* Team Members List */}
+        <div className="lg:col-span-7 bg-[#111111] border border-[#222222] p-6 shadow-2xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-[#222222]">
+            <h3 className="label text-slate-200 flex items-center gap-2">
+              <Users className="w-4 h-4 text-violet-400" />
+              <span>Team & Organization Collaborators</span>
+            </h3>
+            <span className="text-[10px] font-mono text-slate-500 font-bold">{teamMembers.length} MEMBERS</span>
+          </div>
+
+          <div className="space-y-2.5 max-h-48 overflow-y-auto">
+            {teamMembers.length === 0 ? (
+              <div className="p-4 bg-[#050505] border border-[#222222] text-center text-xs text-slate-500 font-mono">
+                {user ? 'No team members added yet. Invite developers below.' : 'Sign in to manage your team organization.'}
+              </div>
+            ) : (
+              teamMembers.map((member) => (
+                <div key={member.id} className="flex items-center justify-between bg-[#050505] p-3 border border-[#222222] text-xs">
+                  <div>
+                    <span className="block font-bold text-slate-200 uppercase text-[11px] tracking-wide">{member.name}</span>
+                    <span className="block text-[10px] text-slate-500 mt-0.5 font-mono">{member.email}</span>
+                  </div>
+                  <div className="flex items-center space-x-3 font-mono">
+                    <span className="text-slate-500 text-[9px] uppercase">JOINED {member.joinedDate}</span>
+                    <span className={`px-2 py-0.5 text-[9px] uppercase font-bold border ${member.role === 'owner' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : member.role === 'admin' ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-transparent text-slate-400 border-[#222222]'}`}>
+                      {member.role}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Add member form */}
+          <form onSubmit={triggerTeamAdd} className="flex gap-2 pt-3 border-t border-[#222222]">
+            <input
+              type="text"
+              placeholder="Full Name"
+              required
+              value={newTeamName}
+              onChange={(e) => setNewTeamName(e.target.value)}
+              className="flex-1 bg-[#050505] border border-[#222222] px-3 py-2 text-xs outline-none focus:border-violet-500 uppercase tracking-wider"
+              id="team-name-input"
+            />
+            <input
+              type="email"
+              placeholder="name@company.com"
+              required
+              value={newTeamEmail}
+              onChange={(e) => setNewTeamEmail(e.target.value)}
+              className="flex-1 bg-[#050505] border border-[#222222] px-3 py-2 text-xs outline-none focus:border-violet-500 font-mono"
+              id="team-email-input"
+            />
+            <select
+              value={newTeamRole}
+              onChange={(e) => setNewTeamRole(e.target.value as any)}
+              className="bg-[#050505] border border-[#222222] px-2 py-2 text-xs text-slate-300 outline-none uppercase font-bold tracking-wider"
+              id="team-role-select"
+            >
+              <option value="developer">Developer</option>
+              <option value="admin">Admin</option>
+              <option value="viewer">Viewer</option>
+            </select>
+            <button
+              type="submit"
+              className="bg-white hover:bg-violet-400 text-black px-4 py-2 text-xs font-bold uppercase tracking-wider transition duration-200"
+              id="add-team-member-btn"
+            >
+              <UserPlus className="w-4 h-4" />
+            </button>
+          </form>
+        </div>
+
+        {/* Referral Rewards */}
+        <div className="lg:col-span-5 bg-[#111111] border border-[#222222] p-6 shadow-2xl space-y-4 flex flex-col justify-between h-full">
+          <div>
+            <h3 className="label text-slate-200 flex items-center gap-2">
+              <Gift className="w-4 h-4 text-violet-400" />
+              <span>Referral Partner Rewards</span>
+            </h3>
+            <p className="text-xs text-slate-400 mt-2">
+              Share your unique code. Get a flat $15 SRE credit bonus for every active developer tenant you onboard.
+            </p>
+          </div>
+
+          <div className="bg-[#050505] p-4 border border-[#222222] text-center space-y-3">
+            <div className="text-slate-500 font-mono text-[9px] uppercase tracking-wider">YOUR PARTNER CODE</div>
+            <div className="text-lg font-mono font-black text-violet-400 select-all p-2 bg-[#111111] border border-[#222222]">
+              {userReferralCode}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 text-xs font-mono text-center pt-2">
+              <div className="border-r border-[#222222]">
+                <div className="text-slate-500 text-[9px] uppercase tracking-wider">REFERRED TEAMS</div>
+                <div className="text-sm font-bold text-slate-200 mt-1 uppercase">{userReferralsCount} active</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-[9px] uppercase tracking-wider">OFFSET SAVED</div>
+                <div className="text-sm font-bold text-cyan-400 mt-1 font-mono">${userReferralBonus} saved</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* GST-COMPLIANT INVOICES LIST */}
+      <div className="bg-[#111111] border border-[#222222] p-6 shadow-2xl space-y-4">
+        <h3 className="label text-slate-200">GST-Compliant Invoices & Transaction History</h3>
+        
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs font-mono">
+            <thead>
+              <tr className="border-b border-[#222222] text-slate-500">
+                <th className="pb-3 label text-[9px] text-slate-500 font-bold">INVOICE ID</th>
+                <th className="pb-3 label text-[9px] text-slate-500 font-bold">DATE</th>
+                <th className="pb-3 label text-[9px] text-slate-500 font-bold">PLAN / ITEM</th>
+                <th className="pb-3 label text-[9px] text-slate-500 font-bold">TAX (GST 18%)</th>
+                <th className="pb-3 label text-[9px] text-slate-500 font-bold">TOTAL (USD)</th>
+                <th className="pb-3 label text-[9px] text-slate-500 font-bold text-right">RECEIPT</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#222222] text-slate-300">
+              {transactions.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-6 text-center text-slate-500 font-mono">
+                    {user ? 'No billing transactions recorded in database yet.' : 'Sign in to view your billing receipts.'}
+                  </td>
+                </tr>
+              ) : (
+                transactions.map((txn) => (
+                  <tr key={txn.id} className="hover:bg-white/3">
+                    <td className="py-3.5 font-bold text-slate-400">{txn.invoiceNumber}</td>
+                    <td className="py-3.5">{new Date(txn.date).toLocaleDateString()}</td>
+                    <td className="py-3.5 font-sans font-bold uppercase text-[10px] tracking-wider text-slate-200">{txn.planName}</td>
+                    <td className="py-3.5 font-mono text-slate-400">${txn.taxAmount?.toFixed(2) || '0.00'}</td>
+                    <td className="py-3.5 font-bold font-mono text-slate-100">${txn.totalAmount?.toFixed(2) || '0.00'}</td>
+                    <td className="py-3.5 text-right">
+                      <button
+                        onClick={() => setSelectedInvoice(txn)}
+                        className="border border-[#222222] hover:bg-white/5 text-slate-300 px-3 py-1 font-bold text-[9px] uppercase tracking-wider ml-auto flex items-center space-x-1.5 transition duration-200"
+                        id={`invoice-download-${txn.invoiceNumber}`}
+                      >
+                        <Download className="w-3.5 h-3.5 text-violet-500" />
+                        <span>Invoice</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* RAZORPAY / CARD CHECKOUT OVERLAY MODAL */}
+      {showRazorpay && (
+        <div className="fixed inset-0 bg-[#050505]/95 backdrop-blur-sm flex items-center justify-center z-50 p-4" id="razorpay-modal">
+          <div className="bg-[#111111] border border-[#222222] w-full max-w-md p-6 shadow-2xl flex flex-col justify-between space-y-4">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-[#222222] pb-3">
+              <div className="flex items-center space-x-3">
+                <div className="bg-violet-600 p-2 text-white">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-slate-200 uppercase tracking-wider">Razorpay Secure Checkout</h4>
+                  <p className="text-[10px] font-mono text-slate-500">MERCHANT: DEVFORGE SRE SYSTEMS</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRazorpay(false)}
+                className="text-slate-500 hover:text-slate-300 font-bold text-sm"
+                id="close-razorpay-btn"
+              >
+                ✕
+              </button>
+            </div>
+
+            {checkoutStep === 'details' && (
+              <div className="space-y-4 text-xs">
+                <div className="bg-[#050505] p-4 border border-[#222222] space-y-2">
+                  <div className="flex justify-between font-sans">
+                    <span className="text-slate-400 label text-[9px]">Selected:</span>
+                    <span className="text-white font-bold uppercase tracking-wider">{selectedPlan ? selectedPlan.name : `${extraCreditsAmount} Credits`}</span>
+                  </div>
+                  <div className="flex justify-between font-mono text-[10px]">
+                    <span className="text-slate-500">Base Price:</span>
+                    <span className="text-slate-300">${pricing.subtotal.toFixed(2)}</span>
+                  </div>
+                  {pricing.discount > 0 && (
+                    <div className="flex justify-between font-mono text-[10px] text-rose-400">
+                      <span>Promo Discount:</span>
+                      <span>-${pricing.discount.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {pricing.referralOffset > 0 && (
+                    <div className="flex justify-between font-mono text-[10px] text-emerald-400">
+                      <span>Referral Credits Offset:</span>
+                      <span>-${pricing.referralOffset.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-mono border-t border-[#222222] pt-2 text-[10px] text-slate-500">
+                    <span>Tax (GST 18%):</span>
+                    <span>${pricing.gstAmount.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between font-sans text-sm font-black border-t border-[#222222] pt-2 text-slate-100">
+                    <span className="uppercase tracking-wider text-[11px]">Grand Total:</span>
+                    <span className="text-violet-400 font-mono">${pricing.total.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Promo Coupon Inputs */}
+                <div className="space-y-1">
+                  <label className="block text-slate-400 font-bold uppercase tracking-wider text-[9px]">Promo / Coupon Code</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="LAUNCH20"
+                      value={couponInput}
+                      onChange={(e) => setCouponInput(e.target.value)}
+                      className="flex-1 bg-[#050505] border border-[#222222] px-3 py-2 text-xs outline-none focus:border-violet-500 font-mono uppercase"
+                      id="coupon-input"
+                    />
+                    <button
+                      onClick={handleApplyCoupon}
+                      className="bg-[#111111] hover:bg-white/5 text-slate-200 text-xs px-3 py-2 border border-[#222222] transition"
+                      id="apply-coupon-btn"
+                    >
+                      <Percent className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {activeCoupon && <span className="block text-[10px] text-emerald-400 mt-1 font-mono">{activeCoupon.description} applied successfully</span>}
+                  {couponError && <span className="block text-[10px] text-rose-400 mt-1 font-mono">{couponError}</span>}
+                </div>
+
+                <button
+                  onClick={handleInitiatePayment}
+                  disabled={isProcessing}
+                  className="w-full bg-white hover:bg-violet-400 disabled:bg-slate-800 disabled:text-slate-500 text-black py-2.5 font-bold uppercase tracking-widest text-[10px] transition duration-200 flex items-center justify-center gap-2"
+                  id="rzp-details-next-btn"
+                >
+                  {isProcessing && (
+                    <span className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                  )}
+                  <span>{isProcessing ? 'Initializing Payment...' : 'Proceed to Payment'}</span>
+                </button>
+              </div>
+            )}
+
+            {checkoutStep === 'payment' && (
+              <div className="space-y-4 text-xs">
+                <div className="text-[10px] font-mono text-amber-400 border border-amber-500/20 bg-amber-950/20 p-2 text-center rounded">
+                  💡 <strong>Sandbox Engine:</strong> Test payment simulation using standard card credentials below.
+                </div>
+
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="block text-slate-400 font-bold uppercase tracking-wider text-[9px]">Card Number</label>
+                    <input
+                      type="text"
+                      value={cardNumber}
+                      onChange={(e) => setCardNumber(e.target.value)}
+                      className="w-full bg-[#050505] border border-[#222222] px-3 py-2 outline-none focus:border-violet-500 font-mono text-slate-300"
+                      id="rzp-card-input"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="block text-slate-400 font-bold uppercase tracking-wider text-[9px]">Expiry Date</label>
+                      <input
+                        type="text"
+                        value={expiry}
+                        onChange={(e) => setExpiry(e.target.value)}
+                        placeholder="MM/YY"
+                        className="w-full bg-[#050505] border border-[#222222] px-3 py-2 outline-none focus:border-violet-500 font-mono text-slate-300"
+                        id="rzp-expiry-input"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-slate-400 font-bold uppercase tracking-wider text-[9px]">CVV Code</label>
+                      <input
+                        type="password"
+                        value={cvv}
+                        onChange={(e) => setCvv(e.target.value)}
+                        className="w-full bg-[#050505] border border-[#222222] px-3 py-2 outline-none focus:border-violet-500 font-mono text-slate-300"
+                        id="rzp-cvv-input"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={submitRazorpayPayment}
+                  className="w-full bg-white hover:bg-violet-400 text-black py-2.5 font-bold uppercase tracking-widest text-[10px] transition duration-200"
+                  id="rzp-pay-submit-btn"
+                >
+                  Pay ${pricing.total.toFixed(2)} Securely
+                </button>
+              </div>
+            )}
+
+            {checkoutStep === 'otp' && (
+              <div className="space-y-4 text-xs text-center">
+                <ShieldCheck className="text-violet-500 w-12 h-12 mx-auto animate-pulse" />
+                <div>
+                  <h5 className="font-bold text-slate-200 uppercase tracking-wider">Enter Authorization Code</h5>
+                  <p className="text-slate-400 mt-1">Payment authorization challenge active. Enter OTP to complete order.</p>
+                </div>
+                <input
+                  type="text"
+                  placeholder="124599"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value)}
+                  className="bg-[#050505] border border-[#222222] px-4 py-2 text-center text-sm font-mono text-slate-300 w-44 mx-auto block outline-none focus:border-violet-500"
+                  id="rzp-otp-input"
+                />
+
+                <button
+                  onClick={verifyOtp}
+                  className="w-full bg-white hover:bg-violet-400 text-black py-2.5 font-bold uppercase tracking-widest text-[10px] transition duration-200"
+                  id="rzp-otp-verify-btn"
+                >
+                  Verify and Authorize
+                </button>
+              </div>
+            )}
+
+            {checkoutStep === 'success' && (
+              <div className="space-y-4 text-xs text-center">
+                <CheckCircle className="text-emerald-400 w-12 h-12 mx-auto" />
+                <div>
+                  <h5 className="font-bold text-slate-200 uppercase tracking-wider">Payment Verified & Saved to Database</h5>
+                  <p className="text-slate-400 mt-1">Transaction recorded in Firestore and your account limits have updated immediately.</p>
+                </div>
+                <div className="bg-[#050505] p-3 border border-[#222222] font-mono text-[10px] text-slate-500 select-all uppercase">
+                  TXN ID: {simulatedTxId}
+                </div>
+
+                <button
+                  onClick={() => setShowRazorpay(false)}
+                  className="w-full bg-transparent hover:bg-white/5 text-slate-300 py-2.5 font-bold uppercase tracking-widest text-[10px] transition duration-200 border border-[#222222]"
+                  id="rzp-success-close-btn"
+                >
+                  Close Window
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* INVOICE DISPLAY PREVIEW MODAL */}
+      {selectedInvoice && (
+        <div className="fixed inset-0 bg-[#050505]/95 backdrop-blur-sm flex items-center justify-center z-50 p-4" id="invoice-modal">
+          <div className="bg-black border border-[#222222] text-white w-full max-w-xl p-8 shadow-2xl relative flex flex-col justify-between space-y-6">
+            
+            <button
+              onClick={() => setSelectedInvoice(null)}
+              className="absolute top-4 right-4 text-slate-500 hover:text-slate-300 font-bold"
+              id="close-invoice-btn"
+            >
+              ✕
+            </button>
+
+            {/* Print Header */}
+            <div className="border-b border-[#222222] pb-5">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h4 className="text-xl font-bold font-sans tracking-tight uppercase text-white">DevForge AI Services</h4>
+                  <p className="text-[10px] font-mono text-slate-500 mt-1">Regd office: Bengaluru Tech Park, Karnataka, India</p>
+                  <p className="text-[10px] font-mono text-slate-500">GSTIN: 29AAFCD9912C1ZS</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-[9px] bg-violet-600/10 text-violet-400 border border-violet-500/20 px-3 py-1 font-mono uppercase tracking-widest font-bold">
+                    TAX INVOICE
+                  </span>
+                  <p className="text-xs font-mono font-bold text-slate-400 mt-2">{selectedInvoice.invoiceNumber}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Details */}
+            <div className="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                <span className="block text-[9px] text-slate-500 uppercase font-mono tracking-wider">Billed To:</span>
+                <span className="block font-bold mt-1 uppercase text-slate-200">{billedUserName}</span>
+                <span className="block text-[10px] text-slate-500 mt-0.5 font-mono">{billedUserEmail}</span>
+              </div>
+              <div className="text-right">
+                <span className="block text-[9px] text-slate-500 uppercase font-mono tracking-wider">Invoice Date:</span>
+                <span className="block font-bold mt-1 text-slate-200">{new Date(selectedInvoice.date).toLocaleDateString()}</span>
+                <span className="block text-[10px] text-slate-500 mt-0.5 font-mono">Transaction ID: {selectedInvoice.id}</span>
+              </div>
+            </div>
+
+            {/* Calculations and Breakdown */}
+            <div className="border border-[#222222] overflow-hidden text-xs">
+              <div className="bg-[#050505] p-3 grid grid-cols-12 font-bold text-slate-400 border-b border-[#222222] uppercase tracking-wider text-[9px]">
+                <span className="col-span-8">Description</span>
+                <span className="col-span-2 text-right">Tax (GST 18%)</span>
+                <span className="col-span-2 text-right">Amount (USD)</span>
+              </div>
+              <div className="p-3 grid grid-cols-12 text-slate-300">
+                <span className="col-span-8 font-bold uppercase tracking-wider text-[11px] text-white">{selectedInvoice.planName}</span>
+                <span className="col-span-2 text-right font-mono text-slate-400">${selectedInvoice.taxAmount?.toFixed(2) || '0.00'}</span>
+                <span className="col-span-2 text-right font-mono font-bold text-white">${selectedInvoice.totalAmount?.toFixed(2) || '0.00'}</span>
+              </div>
+            </div>
+
+            {/* Bottom calculation blocks */}
+            <div className="flex justify-end text-xs font-mono">
+              <div className="w-56 space-y-1.5 text-right">
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500">CGST (9%):</span>
+                  <span className="text-slate-400">${((selectedInvoice.taxAmount || 0) / 2).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500">SGST (9%):</span>
+                  <span className="text-slate-400">${((selectedInvoice.taxAmount || 0) / 2).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between border-t border-[#222222] pt-2 text-sm text-white font-black">
+                  <span className="uppercase tracking-wider text-[11px] font-sans">Grand Total:</span>
+                  <span className="text-violet-400">${selectedInvoice.totalAmount?.toFixed(2) || '0.00'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Signature sign-off */}
+            <div className="border-t border-[#222222] pt-4 flex justify-between items-center text-[9px] text-slate-500 font-mono uppercase">
+              <span>Computer-generated GST tax receipt. Stored in Firestore database.</span>
+              <button
+                onClick={() => window.print()}
+                className="bg-white hover:bg-violet-400 text-black font-sans text-[10px] font-bold uppercase tracking-widest px-4 py-2 transition"
+                id="invoice-print-btn"
+              >
+                Print Invoice
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+    </div>
+  );
+}

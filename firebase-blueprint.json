@@ -1,0 +1,169 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "Software project created by user with agent architecture, files, and state",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["idle", "orchestrating", "building", "deployed", "error"] },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "status"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with tier, compute credits, and metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "planId": { "type": "string" },
+        "planName": { "type": "string" },
+        "creditsRemaining": { "type": "number" },
+        "creditsTotal": { "type": "number" },
+        "referralCode": { "type": "string" },
+        "referralsCount": { "type": "number" },
+        "referralBonus": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid"]
+    },
+    "SubscriptionPlan": {
+      "title": "SubscriptionPlan",
+      "description": "SRE computing engine subscription tier details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "priceMonthly": { "type": "number" },
+        "priceYearly": { "type": "number" },
+        "credits": { "type": "number" },
+        "features": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "name", "priceMonthly", "priceYearly", "credits"]
+    },
+    "MarketplaceProduct": {
+      "title": "MarketplaceProduct",
+      "description": "Agent configs, templates, plugins, and workflows published in the marketplace",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "price": { "type": "number" },
+        "type": { "type": "string", "enum": ["agent", "template", "plugin", "workflow", "component"] },
+        "author": { "type": "string" },
+        "authorId": { "type": "string" },
+        "rating": { "type": "number" },
+        "downloads": { "type": "number" },
+        "earnings": { "type": "number" },
+        "artifactCode": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "title", "price", "type", "author"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Billing transaction record for credit top-ups, subscriptions, or marketplace purchases",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "amount": { "type": "number" },
+        "planName": { "type": "string" },
+        "status": { "type": "string", "enum": ["success", "paid", "pending", "failed"] },
+        "invoiceNumber": { "type": "string" },
+        "paymentId": { "type": "string" },
+        "userId": { "type": "string" },
+        "taxAmount": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "couponUsed": { "type": "string" }
+      },
+      "required": ["id", "amount", "status"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Promotional discount or credit voucher codes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "discountType": { "type": "string", "enum": ["percent", "flat"] },
+        "discountValue": { "type": "number" },
+        "description": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["code", "discountType", "discountValue", "active"]
+    },
+    "TeamMember": {
+      "title": "TeamMember",
+      "description": "Organization and tenant team members",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "admin", "developer", "viewer"] },
+        "joinedDate": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "MarketplacePurchase": {
+      "title": "MarketplacePurchase",
+      "description": "Record of acquired or downloaded marketplace items",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "productId": { "type": "string" },
+        "productTitle": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentId": { "type": "string" },
+        "purchasedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "productId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile records indexed by auth UID"
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "User software projects and workspace files"
+    },
+    "/plans/{planId}": {
+      "schema": "SubscriptionPlan",
+      "description": "SRE computing tier plan catalog"
+    },
+    "/marketplace_products/{productId}": {
+      "schema": "MarketplaceProduct",
+      "description": "Public and creator marketplace items"
+    },
+    "/transactions/{txId}": {
+      "schema": "Transaction",
+      "description": "User payment and transaction receipts"
+    },
+    "/coupons/{couponId}": {
+      "schema": "Coupon",
+      "description": "System discount coupons and promotional codes"
+    },
+    "/team_members/{memberId}": {
+      "schema": "TeamMember",
+      "description": "Team collaborators per tenant"
+    },
+    "/marketplace_purchases/{purchaseId}": {
+      "schema": "MarketplacePurchase",
+      "description": "User marketplace item acquisition records"
+    }
+  }
+}

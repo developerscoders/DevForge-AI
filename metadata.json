@@ -1,0 +1,6 @@
+{
+  "name": "DevForge AI",
+  "description": "An autonomous multi-agent software engineering platform with a collaborative AI agent swarm, real-time code streaming, visual app builder, sandboxed code viewer, and Razorpay-powered subscription and billing systems.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
