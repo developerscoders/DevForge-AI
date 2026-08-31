@@ -19,7 +19,8 @@ import {
   ArrowRight,
   Wrench,
   CheckCircle2,
-  Users
+  Users,
+  Server
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -134,6 +135,40 @@ export default function AgentOrchestrationGraph({ agents, projectId, onRefresh }
             <RefreshCw className={`w-3.5 h-3.5 ${isHealingLoading ? 'animate-spin' : ''}`} />
             <span>{isHealingLoading ? 'Intervening...' : 'Simulate Failure & Self-Heal'}</span>
           </button>
+        </div>
+      </div>
+
+      {/* Swarm Execution Milestones Stepper */}
+      <div className="bg-[#0b0b0d] border border-[#222222] p-4 overflow-x-auto">
+        <div className="flex items-center justify-between min-w-[700px] gap-2">
+          {[
+            { step: '01', title: 'Strategic PRD', lead: 'Parker Lead', model: 'Claude 3.5', icon: CheckCircle2, status: 'complete' },
+            { step: '02', title: 'Architecture', lead: 'Sophia Lead', model: 'GPT-4o Mini', icon: CheckCircle2, status: 'complete' },
+            { step: '03', title: 'React Synthesizer', lead: 'Frank Lead', model: 'LLaMA 3.1 70B', icon: CheckCircle2, status: 'complete' },
+            { step: '04', title: 'CEO Cross-Heal', lead: 'Aria CEO', model: 'Gemini 2.5', icon: Sparkles, status: 'complete' },
+            { step: '05', title: 'QA & Security', lead: 'Quinn Lead', model: 'LLaMA 3.3 70B', icon: ShieldCheck, status: 'complete' },
+            { step: '06', title: 'SRE Docker Ingress', lead: 'Devon Lead', model: 'Mixtral 8x7B', icon: Server, status: 'complete' },
+          ].map((m, idx) => {
+            const Icon = m.icon;
+            return (
+              <div key={idx} className="flex-1 flex items-center">
+                <div className="bg-[#141416] border border-violet-500/30 hover:border-violet-500 p-2.5 rounded flex-1 transition">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-mono text-violet-400 font-bold">M-{m.step}</span>
+                    <Icon className="w-3 h-3 text-emerald-400" />
+                  </div>
+                  <div className="text-[11px] font-bold text-slate-200 uppercase tracking-wide mt-1 truncate">{m.title}</div>
+                  <div className="text-[9px] font-mono text-slate-400 mt-0.5 flex items-center justify-between">
+                    <span>{m.lead}</span>
+                    <span className="text-indigo-300 text-[8px]">{m.model}</span>
+                  </div>
+                </div>
+                {idx < 5 && (
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-600 mx-1 shrink-0" />
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 

@@ -717,7 +717,22 @@ app.get('/api/billing/subscription', (req, res) => {
   res.json(db.activeSubscription);
 });
 
-// 7. Simulated Payment Creation (Razorpay / Stripe / PayPal)
+// Payment OTP Authorization Sessions Store
+interface PaymentOtpSession {
+  orderId: string;
+  otp: string;
+  expiresAt: number;
+  attemptsLeft: number;
+  verified: boolean;
+  authSignature?: string;
+  maskedDestination: string;
+  amount: number;
+  description: string;
+}
+
+const activePaymentOtpSessions: Record<string, PaymentOtpSession> = {};
+
+// 7. Payment Order Creation (Razorpay / Stripe / PayPal)
 app.post('/api/payment/create-order', async (req, res) => {
   const { planId, billingCycle, extraCredits, providerId = 'razorpay' } = req.body;
 
@@ -749,6 +764,104 @@ app.post('/api/payment/create-order', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// 7.1 Dispatch 2FA OTP Challenge for Card / Payment Authorization
+app.post('/api/payment/otp/send', (req, res) => {
+  const { orderId, planId, billingCycle, extraCredits, email, phone } = req.body;
+
+  const targetOrderId = orderId || `order_sim_${Math.random().toString(36).substring(2, 11)}`;
+
+  let amount = 0;
+  let description = '';
+  if (planId) {
+    const plan = SUBSCRIPTION_PLANS.find(p => p.id === planId);
+    amount = plan ? (billingCycle === 'yearly' ? plan.priceYearly : plan.priceMonthly) : 0;
+    description = plan ? `${plan.name} (${billingCycle})` : 'Subscription Upgrade';
+  } else if (extraCredits) {
+    amount = extraCredits === 1000 ? 10 : extraCredits === 5000 ? 45 : 80;
+    description = `${extraCredits.toLocaleString()} AI Credits`;
+  }
+
+  // Generate 6-digit numeric OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+
+  // Format masked destination
+  let maskedDestination = '+1 (•••) •••-8921';
+  if (phone && phone.trim().length >= 4) {
+    const cleanPhone = phone.trim();
+    maskedDestination = `${cleanPhone.slice(0, 3)} •••• ••${cleanPhone.slice(-4)}`;
+  } else if (email && email.includes('@')) {
+    const [name, domain] = email.split('@');
+    maskedDestination = `${name[0]}••••${name.slice(-1)}@${domain}`;
+  }
+
+  activePaymentOtpSessions[targetOrderId] = {
+    orderId: targetOrderId,
+    otp,
+    expiresAt,
+    attemptsLeft: 3,
+    verified: false,
+    maskedDestination,
+    amount,
+    description
+  };
+
+  console.log(`[3D-Secure Payment Challenge] Order: ${targetOrderId} | OTP Code: ${otp} | Target: ${maskedDestination} | Expires in: 5m`);
+
+  res.json({
+    success: true,
+    message: `6-digit authentication challenge sent to ${maskedDestination}`,
+    orderId: targetOrderId,
+    maskedDestination,
+    expiresAt,
+    demoCode: otp
+  });
+});
+
+// 7.2 Verify 2FA OTP Challenge
+app.post('/api/payment/otp/verify', (req, res) => {
+  const { orderId, otp } = req.body;
+
+  if (!orderId || !otp) {
+    return res.status(400).json({ error: 'Order ID and 6-digit OTP are required' });
+  }
+
+  const session = activePaymentOtpSessions[orderId];
+  if (!session) {
+    return res.status(404).json({ error: 'Payment authorization session not found or expired. Please re-initiate payment.' });
+  }
+
+  if (Date.now() > session.expiresAt) {
+    delete activePaymentOtpSessions[orderId];
+    return res.status(400).json({ error: 'Security OTP has expired. Please request a new code.' });
+  }
+
+  if (session.attemptsLeft <= 0) {
+    delete activePaymentOtpSessions[orderId];
+    return res.status(403).json({ error: 'Maximum verification attempts exceeded. Payment locked for security.' });
+  }
+
+  const cleanInput = otp.toString().replace(/\D/g, '');
+  if (session.otp !== cleanInput) {
+    session.attemptsLeft -= 1;
+    return res.status(400).json({
+      error: `Invalid authorization code. ${session.attemptsLeft} attempt(s) remaining.`,
+      attemptsLeft: session.attemptsLeft
+    });
+  }
+
+  // Mark session as verified
+  session.verified = true;
+  session.authSignature = `auth_sig_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+
+  res.json({
+    success: true,
+    verified: true,
+    authSignature: session.authSignature,
+    message: 'OTP Verified successfully. Authorizing payment capture.'
+  });
 });
 
 // 8. Payment Verification with GST-Compliant Invoice Persistence

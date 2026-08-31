@@ -42,7 +42,7 @@ import {
 
 function AppContent() {
   const navigate = useNavigate();
-  const { user, profile, updateUserCredits, refreshProfile } = useAuth();
+  const { user, profile, updateUserCredits, updateUserSubscription, refreshProfile } = useAuth();
 
   // Root database states
   const [projects, setProjects] = useState<Project[]>([]);
@@ -258,21 +258,40 @@ function AppContent() {
         couponUsed: coupon
       };
 
-      if (user) {
-        // 1. Save Transaction to Firestore
-        await saveFirestoreTransaction(tx, user.uid);
+      // 1. Instantly update subscription in AuthContext (handles both Firebase Auth and Guest Sandbox state)
+      if (selectedPlanObj) {
+        await updateUserSubscription(
+          selectedPlanObj.id,
+          selectedPlanObj.name,
+          cycle as 'monthly' | 'yearly',
+          selectedPlanObj.credits + (extraCredits || 0)
+        );
+      } else if (extraCredits) {
+        await updateUserCredits(-extraCredits); // adds extra credits
+      }
 
-        // 2. Update User Profile in Firestore
-        if (selectedPlanObj) {
-          await updateFirestoreUserSubscription(
-            user.uid,
-            selectedPlanObj,
-            cycle as 'monthly' | 'yearly',
-            extraCredits || 0
-          );
-        } else if (extraCredits) {
-          await updateUserCredits(-extraCredits); // adds extra credits
-        }
+      // 2. Notify backend server to record transaction and update SRE analytics
+      try {
+        await fetch('/api/billing/upgrade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            planId,
+            cycle,
+            extraCredits,
+            coupon,
+            userId: user?.uid || 'guest_user'
+          })
+        });
+
+        const analyticsRes = await fetch('/api/billing/analytics');
+        const analyticsData = await analyticsRes.json();
+        setAdminAnalytics(analyticsData);
+      } catch (e) {}
+
+      if (user) {
+        // Save Transaction to Firestore
+        await saveFirestoreTransaction(tx, user.uid);
 
         // Refresh transactions list
         const updatedTxs = await fetchFirestoreTransactions(user.uid);
@@ -435,6 +454,17 @@ function AppContent() {
     }
   };
 
+  // 12. Handle project status/details update
+  const handleProjectUpdated = (updatedProject: Project) => {
+    setProjects((prev) => {
+      const exists = prev.some((p) => p.id === updatedProject.id);
+      if (exists) {
+        return prev.map((p) => (p.id === updatedProject.id ? { ...p, ...updatedProject } : p));
+      }
+      return [updatedProject, ...prev];
+    });
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col font-sans antialiased text-slate-100 pb-16">
       <Navbar
@@ -468,6 +498,7 @@ function AppContent() {
               onUpdateProjectFiles={handleUpdateProjectFiles}
               onTriggerStream={handleTriggerStream}
               onDeleteProject={handleDeleteProject}
+              onProjectUpdated={handleProjectUpdated}
             />
           }
         />

@@ -67,7 +67,7 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     }
   }
 
-  // 2. OpenRouter Provider (Model 1 & 2: Claude 3.5 Sonnet, GPT-4o-mini, DeepSeek)
+  // 2. OpenRouter Provider (Claude 3.5 Sonnet, GPT-4o-mini, DeepSeek)
   if (provider === 'openrouter') {
     const key = process.env.OPENROUTER_API_KEY;
     if (key && key.trim() !== '') {
@@ -110,7 +110,7 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     }
   }
 
-  // 3. NVIDIA NIM Provider (Model: LLaMA 3.1 70B / Nemotron)
+  // 3. NVIDIA NIM Provider (LLaMA 3.1 70B / Nemotron)
   if (provider === 'nvidia') {
     const key = process.env.NVIDIA_API_KEY;
     if (key && key.trim() !== '') {
@@ -151,7 +151,7 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     }
   }
 
-  // 4. Groq Free Inference Provider (Model: LLaMA 3.3 70B / Mixtral 8x7B)
+  // 4. Groq Free Inference Provider (LLaMA 3.3 70B / Mixtral 8x7B)
   if (provider === 'groq') {
     const key = process.env.GROQ_API_KEY;
     if (key && key.trim() !== '') {
@@ -192,7 +192,36 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     }
   }
 
-  // Resilient Offline Synthesis when API keys are not provided
+  // 5. Intelligent Fallback Routing: If a non-Gemini provider key is absent, route to Gemini client if available
+  const fallbackClient = getGeminiClient();
+  if (fallbackClient) {
+    try {
+      const response = await fallbackClient.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: systemInstruction
+          ? {
+              systemInstruction: `You are executing on behalf of ${provider.toUpperCase()} (${model}).\n${systemInstruction}`,
+            }
+          : undefined,
+      });
+
+      const text = response.text || '';
+      if (text) {
+        return {
+          text,
+          provider: `${provider.toUpperCase()} (via Gemini Core)`,
+          model: model || 'auto-routed',
+          latencyMs: Date.now() - startTime,
+          isSimulated: false,
+        };
+      }
+    } catch (e: any) {
+      console.warn(`Fallback to Gemini failed: ${e.message}`);
+    }
+  }
+
+  // 6. Resilient Offline Synthesis when no keys are active
   return {
     text: '',
     provider: `${provider.toUpperCase()} (Offline Engine)`,
@@ -203,10 +232,39 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
 }
 
 export function getProviderConfigStatus() {
+  const geminiConfigured = !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
+  const openrouterConfigured = !!(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim() !== '');
+  const nvidiaConfigured = !!(process.env.NVIDIA_API_KEY && process.env.NVIDIA_API_KEY.trim() !== '');
+  const groqConfigured = !!(process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim() !== '');
+
   return {
-    gemini: !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
-    openrouter: !!(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim() !== ''),
-    nvidia: !!(process.env.NVIDIA_API_KEY && process.env.NVIDIA_API_KEY.trim() !== ''),
-    groq: !!(process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim() !== ''),
+    gemini: {
+      configured: geminiConfigured,
+      name: 'Google Gemini',
+      models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+      role: 'CEO Executive Synthesis & Cross-Heal',
+      latencyEstimate: '180ms',
+    },
+    openrouter: {
+      configured: openrouterConfigured,
+      name: 'OpenRouter AI',
+      models: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o-mini', 'deepseek/deepseek-r1'],
+      role: 'Strategic PRD & Architecture Contracts',
+      latencyEstimate: openrouterConfigured ? '340ms' : 'Fallback to Gemini',
+    },
+    nvidia: {
+      configured: nvidiaConfigured,
+      name: 'NVIDIA NIM',
+      models: ['meta/llama-3.1-70b-instruct', 'nvidia/nemotron-4-340b'],
+      role: 'React UI Component Tree Synthesizer',
+      latencyEstimate: nvidiaConfigured ? '220ms' : 'Fallback to Gemini',
+    },
+    groq: {
+      configured: groqConfigured,
+      name: 'Groq Free Inference',
+      models: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'],
+      role: 'QA Security Assertions & SRE Ingress',
+      latencyEstimate: groqConfigured ? '90ms' : 'Fallback to Gemini',
+    },
   };
 }

@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { Terminal, Shield, RefreshCw, AlertTriangle, CheckCircle } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Terminal, Shield, RefreshCw, AlertTriangle, CheckCircle, ArrowDown, ArrowUp, ToggleLeft, ToggleRight } from 'lucide-react';
 
 interface StreamLog {
   timestamp: string;
@@ -14,12 +14,27 @@ interface StreamingPanelProps {
 }
 
 export default function StreamingPanel({ logs, projectStatus }: StreamingPanelProps) {
-  const endRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
 
-  // Auto scroll to bottom
+  // Auto-scroll ONLY inside the terminal element, never scrolling the browser window
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+    if (autoScroll && terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [logs, autoScroll]);
+
+  const scrollToTop = () => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = 0;
+    }
+  };
+
+  const scrollToBottom = () => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  };
 
   const logTypeColors = {
     info: 'text-sky-400',
@@ -41,8 +56,43 @@ export default function StreamingPanel({ logs, projectStatus }: StreamingPanelPr
           <p className="text-[9px] text-slate-500 font-mono mt-1 uppercase tracking-widest">MONITORING VM CONTAINER COMPILATION PROCESS</p>
         </div>
 
-        {/* Current status chip */}
-        <div className="flex items-center space-x-2">
+        {/* Current status chip & Scroll controls */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Auto Scroll Toggle */}
+          <button
+            type="button"
+            onClick={() => setAutoScroll(!autoScroll)}
+            className={`flex items-center space-x-1.5 px-2.5 py-1 text-[9px] font-mono uppercase tracking-wider border transition ${
+              autoScroll
+                ? 'bg-violet-950/40 text-violet-300 border-violet-700/40'
+                : 'bg-black text-slate-500 border-[#333333] hover:text-slate-300'
+            }`}
+            title="Toggle terminal internal auto-scroll"
+          >
+            {autoScroll ? <ToggleRight className="w-3.5 h-3.5 text-violet-400" /> : <ToggleLeft className="w-3.5 h-3.5" />}
+            <span>Auto-Scroll: {autoScroll ? 'ON' : 'OFF'}</span>
+          </button>
+
+          {/* Scroll Top / Bottom buttons */}
+          <div className="flex items-center border border-[#333333] bg-black">
+            <button
+              type="button"
+              onClick={scrollToTop}
+              title="Scroll terminal to top"
+              className="p-1 text-slate-400 hover:text-white border-r border-[#333333] transition"
+            >
+              <ArrowUp className="w-3 h-3" />
+            </button>
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              title="Scroll terminal to bottom"
+              className="p-1 text-slate-400 hover:text-white transition"
+            >
+              <ArrowDown className="w-3 h-3" />
+            </button>
+          </div>
+
           {projectStatus === 'planning' || projectStatus === 'coding' || projectStatus === 'testing' ? (
             <div className="flex items-center space-x-2 bg-indigo-500/10 text-indigo-400 px-3 py-1.5 border border-indigo-500/20 text-[9px] font-mono uppercase tracking-widest font-black">
               <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -62,8 +112,11 @@ export default function StreamingPanel({ logs, projectStatus }: StreamingPanelPr
         </div>
       </div>
 
-      {/* Terminal View */}
-      <div className="bg-[#050505] border border-[#222222] p-5 h-72 overflow-y-auto font-mono text-xs space-y-2.5 shadow-inner leading-relaxed rounded-none">
+      {/* Terminal View - Internal Scroll Only */}
+      <div
+        ref={terminalRef}
+        className="bg-[#050505] border border-[#222222] p-5 h-72 overflow-y-auto font-mono text-xs space-y-2.5 shadow-inner leading-relaxed rounded-none select-text"
+      >
         {/* Boot Logs */}
         <div className="text-slate-500">// Bootstrapping secure sandbox, container isolation layer active...</div>
         <div className="text-slate-500">// Environment specifications loaded: NodeJS VM runtime verified.</div>
@@ -83,8 +136,6 @@ export default function StreamingPanel({ logs, projectStatus }: StreamingPanelPr
             // No compilation logs streamed. Standard environment idling.
           </div>
         )}
-
-        <div ref={endRef} />
       </div>
 
       {/* SRE Compliance panel */}

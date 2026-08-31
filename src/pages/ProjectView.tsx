@@ -21,13 +21,17 @@ import {
   Edit3,
   Check,
   X,
-  Database
+  Database,
+  Layers,
+  Sparkles
 } from 'lucide-react';
 import AgentOrchestrationGraph from '../components/AgentOrchestrationGraph';
 import StreamingPanel from '../components/StreamingPanel';
 import FileTree from '../components/FileTree';
 import CodeViewer from '../components/CodeViewer';
 import VisualAppBuilder from '../components/VisualAppBuilder';
+import LiveSandboxPreview from '../components/LiveSandboxPreview';
+import ExportProjectModal from '../components/ExportProjectModal';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from '../components/AuthModal';
 import {
@@ -42,18 +46,21 @@ interface ProjectViewProps {
   onUpdateProjectFiles: (projectId: string, files: FileNode[]) => Promise<void>;
   onTriggerStream: (projectId: string) => Promise<void>;
   onDeleteProject?: (projectId: string) => Promise<void>;
+  onProjectUpdated?: (project: Project) => void;
 }
 
 export default function ProjectView({
   projects,
   onUpdateProjectFiles,
   onTriggerStream,
-  onDeleteProject
+  onDeleteProject,
+  onProjectUpdated
 }: ProjectViewProps) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'swarm' | 'code' | 'visual' | 'preview'>('swarm');
   const [project, setProject] = useState<Project | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -98,13 +105,20 @@ export default function ProjectView({
           setSelectedFile(fsProj.files[0].path);
           setFileContent(fsProj.files[0].content || '');
         }
+        if (onProjectUpdated) {
+          onProjectUpdated(fsProj);
+        }
       }
     });
 
     // Subscribe to real-time Firestore changes
     const unsubscribe = listenToFirestoreProject(id, (updated) => {
       if (isMounted && updated) {
-        setProject((prev) => ({ ...prev, ...updated }));
+        setProject((prev) => {
+          const next = { ...(prev || {}), ...updated } as Project;
+          if (onProjectUpdated) onProjectUpdated(next);
+          return next;
+        });
       }
     });
 
@@ -122,6 +136,9 @@ export default function ProjectView({
       if (res.ok) {
         const data: Project = await res.json();
         setProject(data);
+        if (onProjectUpdated) {
+          onProjectUpdated(data);
+        }
 
         // If the project state progressed, persist full snapshot to Firestore
         if (user && data.status) {
@@ -312,6 +329,15 @@ export default function ProjectView({
               <span className="text-[10px] font-mono text-slate-500 font-bold uppercase tracking-wider">
                 ID: {project.id}
               </span>
+              <span
+                className={`text-[9px] font-mono px-2 py-0.5 border uppercase tracking-wider font-bold ${
+                  project.status === 'deployed'
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : 'bg-violet-500/15 text-violet-400 border-violet-500/30 animate-pulse'
+                }`}
+              >
+                {project.status === 'deployed' ? '✓ DEPLOYED & READY' : `SWARM: ${project.status?.toUpperCase() || 'PLANNING'}`}
+              </span>
             </div>
             <div className="flex items-center space-x-2 mt-1">
               <h1 className="massive-type text-3xl md:text-4xl text-white uppercase tracking-wide">
@@ -331,12 +357,12 @@ export default function ProjectView({
         {/* Right workspace actions */}
         <div className="flex flex-wrap items-center gap-2.5">
           <button
-            onClick={handleDownloadProjectBundle}
-            className="bg-[#111111] hover:bg-[#1a1a1a] border border-[#222222] text-slate-300 text-[10px] uppercase tracking-widest font-bold px-3.5 py-2.5 transition duration-200 flex items-center space-x-1.5"
-            id="download-workspace-bundle-btn"
+            onClick={() => setShowExportModal(true)}
+            className="bg-white hover:bg-violet-400 text-black text-[10px] uppercase tracking-widest font-extrabold px-3.5 py-2.5 transition duration-200 flex items-center space-x-1.5 shadow-md"
+            id="export-workspace-bundle-btn"
           >
-            <Download className="w-3.5 h-3.5 text-violet-400" />
-            <span>Export Bundle</span>
+            <Download className="w-3.5 h-3.5" />
+            <span>Export Project</span>
           </button>
 
           <button
@@ -361,11 +387,11 @@ export default function ProjectView({
           {project.status === 'deployed' && (
             <button
               onClick={() => setActiveTab('preview')}
-              className="bg-white hover:bg-violet-400 text-black text-[10px] uppercase tracking-widest font-extrabold px-4 py-2.5 transition duration-200"
+              className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-[10px] uppercase tracking-widest font-extrabold px-4 py-2.5 transition duration-200 flex items-center space-x-1.5 shadow-md"
               id="open-sandbox-btn"
             >
-              <Globe className="w-3.5 h-3.5 inline mr-1.5" />
-              <span>Launch Sandbox</span>
+              <Globe className="w-3.5 h-3.5" />
+              <span>Live Preview</span>
             </button>
           )}
         </div>
@@ -448,7 +474,7 @@ export default function ProjectView({
           id="tab-ws-code"
         >
           <Code className="w-4 h-4" />
-          <span>Source Code</span>
+          <span>Source Code ({project.files?.length || 0})</span>
         </button>
 
         <button
@@ -470,7 +496,7 @@ export default function ProjectView({
           id="tab-ws-preview"
         >
           <Globe className="w-4 h-4" />
-          <span>Live Preview</span>
+          <span>Live Sandbox Preview</span>
         </button>
       </div>
 
@@ -490,7 +516,7 @@ export default function ProjectView({
               onSelectFile={handleSelectFile}
               selectedFilePath={selectedFile}
               onUploadFile={handleUploadFile}
-              onDownloadProject={handleDownloadProjectBundle}
+              onDownloadProject={() => setShowExportModal(true)}
             />
           </div>
           <div className="lg:col-span-9">
@@ -511,64 +537,17 @@ export default function ProjectView({
       )}
 
       {activeTab === 'preview' && (
-        <div
-          className="bg-[#111111] border border-[#222222] overflow-hidden shadow-2xl flex flex-col h-[560px] text-slate-100"
-          id="sandbox-iframe"
-        >
-          {/* Iframe simulated URL browser bar */}
-          <div className="bg-[#050505] px-4 py-3.5 border-b border-[#222222] flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <div className="flex space-x-1.5 select-none">
-                <span className="w-2.5 h-2.5 bg-rose-500 inline-block"></span>
-                <span className="w-2.5 h-2.5 bg-amber-500 inline-block"></span>
-                <span className="w-2.5 h-2.5 bg-emerald-500 inline-block"></span>
-              </div>
-            </div>
-
-            {/* URL input field */}
-            <div className="bg-[#111111] border border-[#222222] text-[10px] font-mono text-slate-400 px-4 py-1.5 w-full max-w-xl text-center shadow-inner flex items-center justify-center space-x-1.5 uppercase tracking-widest font-bold">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>https://{project.id}.devforge.live/api/landing</span>
-            </div>
-
-            <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">PORT 3000</span>
-          </div>
-
-          {/* Simulated Application rendering viewport */}
-          <div
-            className="flex-1 bg-[#050505] p-8 flex flex-col items-center justify-center space-y-6 overflow-y-auto"
-            id="simulated-browser-viewport"
-          >
-            <div className="text-center max-w-lg space-y-4">
-              <Bot className="w-12 h-12 text-indigo-400 mx-auto animate-pulse" />
-              <div>
-                <span className="label text-[9px] text-indigo-400 mb-1">Sandbox Preview</span>
-                <h3 className="text-3xl font-bold uppercase tracking-wider text-white mt-1">{project.name}</h3>
-                <p className="text-xs text-slate-400 mt-2 leading-relaxed uppercase tracking-wider text-[10px]">
-                  {project.description || project.prompt}
-                </p>
-              </div>
-
-              <div className="bg-[#111111] p-4 border border-[#222222] font-mono text-xs text-left text-indigo-300">
-                <div>// SRE VM Status: Containers deployed successfully.</div>
-                <div className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">
-                  Ready for full production integration. Code downloaded compiles cleanly.
-                </div>
-              </div>
-
-              <div className="flex justify-center gap-3 pt-3">
-                <button
-                  onClick={handleDownloadProjectBundle}
-                  className="bg-white hover:bg-violet-400 text-black font-bold text-[10px] uppercase tracking-widest px-4 py-2.5 transition duration-200 flex items-center space-x-1.5"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download Project Files (.JSON)</span>
-                </button>
-              </div>
-            </div>
-          </div>
+        <div>
+          <LiveSandboxPreview project={project} onExport={() => setShowExportModal(true)} />
         </div>
       )}
+
+      {/* Full Project Export Modal */}
+      <ExportProjectModal
+        project={project}
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+      />
 
       <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
     </div>

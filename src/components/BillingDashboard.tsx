@@ -15,7 +15,14 @@ import {
   Users,
   Sparkles,
   LogIn,
-  AlertTriangle
+  AlertTriangle,
+  Lock,
+  Smartphone,
+  Key,
+  RefreshCw,
+  Clock,
+  ShieldAlert,
+  Check
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
@@ -74,6 +81,16 @@ export default function BillingDashboard({
   const [simulatedTxId, setSimulatedTxId] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // 2FA OTP Challenge State
+  const [currentOrderId, setCurrentOrderId] = useState('');
+  const [otpDestination, setOtpDestination] = useState('');
+  const [demoOtpCode, setDemoOtpCode] = useState('');
+  const [otpTimerSeconds, setOtpTimerSeconds] = useState(60);
+  const [otpError, setOtpError] = useState('');
+  const [attemptsRemaining, setAttemptsRemaining] = useState(3);
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+
   // Invoice view modal
   const [selectedInvoice, setSelectedInvoice] = useState<Transaction | null>(null);
 
@@ -81,6 +98,19 @@ export default function BillingDashboard({
   const userReferralCode = profile?.referralCode || (user ? `DEV_${user.uid.substring(0, 6).toUpperCase()}` : 'SIGN_IN_REQUIRED');
   const userReferralsCount = profile?.referralsCount || 0;
   const userReferralBonus = profile?.referralBonus || 0;
+
+  // 2FA Countdown timer effect
+  useEffect(() => {
+    let interval: any = null;
+    if (checkoutStep === 'otp' && otpTimerSeconds > 0) {
+      interval = setInterval(() => {
+        setOtpTimerSeconds((prev) => Math.max(0, prev - 1));
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [checkoutStep, otpTimerSeconds]);
 
   // Load Razorpay SDK dynamically
   useEffect(() => {
@@ -184,12 +214,79 @@ export default function BillingDashboard({
 
   const pricing = calculateTotal();
 
-  const submitRazorpayPayment = () => {
+  const submitRazorpayPayment = async () => {
     if (!cardNumber || !expiry || !cvv) {
       alert('Please fill out card credentials.');
       return;
     }
-    setCheckoutStep('otp');
+
+    setIsSendingOtp(true);
+    setOtpError('');
+    setOtp('');
+
+    try {
+      const generatedOrderId = `ord_sec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      setCurrentOrderId(generatedOrderId);
+
+      const res = await fetch('/api/payment/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: generatedOrderId,
+          planId: selectedPlan?.id,
+          billingCycle,
+          extraCredits: extraCreditsAmount || undefined,
+          email: user?.email || profile?.email || 'developer@devforge.ai',
+          phone: '+1 555 019 8921'
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to dispatch security authorization code');
+      }
+
+      setOtpDestination(data.maskedDestination || 'registered mobile/email');
+      setDemoOtpCode(data.demoCode || '');
+      setOtpTimerSeconds(60);
+      setAttemptsRemaining(3);
+      setCheckoutStep('otp');
+    } catch (err: any) {
+      alert(err.message || 'Could not send verification code.');
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    setIsSendingOtp(true);
+    setOtpError('');
+    setOtp('');
+    try {
+      const res = await fetch('/api/payment/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: currentOrderId,
+          planId: selectedPlan?.id,
+          billingCycle,
+          extraCredits: extraCreditsAmount || undefined,
+          email: user?.email || profile?.email || 'developer@devforge.ai',
+          phone: '+1 555 019 8921'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to resend code');
+      }
+      setDemoOtpCode(data.demoCode || '');
+      setOtpTimerSeconds(60);
+      setAttemptsRemaining(3);
+    } catch (err: any) {
+      setOtpError(err.message || 'Failed to resend OTP.');
+    } finally {
+      setIsSendingOtp(false);
+    }
   };
 
   const handleInitiatePayment = async () => {
@@ -291,7 +388,37 @@ export default function BillingDashboard({
   };
 
   const verifyOtp = async () => {
+    const cleanOtp = otp.trim().replace(/\D/g, '');
+    if (cleanOtp.length !== 6) {
+      setOtpError('Please enter the full 6-digit authentication code.');
+      return;
+    }
+
+    setIsVerifyingOtp(true);
+    setOtpError('');
+
     try {
+      // 1. Verify OTP with Server
+      const otpRes = await fetch('/api/payment/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: currentOrderId,
+          otp: cleanOtp
+        })
+      });
+
+      const otpData = await otpRes.json();
+      if (!otpRes.ok || !otpData.verified) {
+        if (otpData.attemptsLeft !== undefined) {
+          setAttemptsRemaining(otpData.attemptsLeft);
+        }
+        setOtpError(otpData.error || 'Invalid OTP authentication code.');
+        setIsVerifyingOtp(false);
+        return;
+      }
+
+      // 2. OTP is verified! Proceed to Capture & Authorize Payment
       const generatedTxId = `pay_rzp_${Math.random().toString(36).substring(2, 11)}`;
       setSimulatedTxId(generatedTxId);
 
@@ -301,13 +428,15 @@ export default function BillingDashboard({
         body: JSON.stringify({
           providerId: 'razorpay',
           paymentId: generatedTxId,
-          orderId: `order_sim_${Math.random().toString(36).substring(2, 11)}`,
+          orderId: currentOrderId,
+          signature: otpData.authSignature,
           planId: selectedPlan?.id,
           billingCycle,
           extraCredits: extraCreditsAmount || undefined,
           couponCode: activeCoupon?.code || undefined
         })
       });
+
       const verifyData = await verifyRes.json();
 
       if (verifyData.success) {
@@ -320,10 +449,13 @@ export default function BillingDashboard({
         );
         setCheckoutStep('success');
       } else {
+        setOtpError(verifyData.error || 'Payment capture failed.');
         setCheckoutStep('failed');
       }
-    } catch (e) {
-      setCheckoutStep('failed');
+    } catch (e: any) {
+      setOtpError(e.message || 'Verification failed. Please try again.');
+    } finally {
+      setIsVerifyingOtp(false);
     }
   };
 
@@ -842,37 +974,159 @@ export default function BillingDashboard({
 
                 <button
                   onClick={submitRazorpayPayment}
-                  className="w-full bg-white hover:bg-violet-400 text-black py-2.5 font-bold uppercase tracking-widest text-[10px] transition duration-200"
+                  disabled={isSendingOtp}
+                  className="w-full bg-white hover:bg-violet-400 disabled:bg-slate-800 disabled:text-slate-500 text-black py-2.5 font-bold uppercase tracking-widest text-[10px] transition duration-200 flex items-center justify-center gap-2"
                   id="rzp-pay-submit-btn"
                 >
-                  Pay ${pricing.total.toFixed(2)} Securely
+                  {isSendingOtp && (
+                    <span className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                  )}
+                  <span>{isSendingOtp ? 'Dispatching 2FA Code...' : `Pay $${pricing.total.toFixed(2)} Securely`}</span>
                 </button>
               </div>
             )}
 
             {checkoutStep === 'otp' && (
-              <div className="space-y-4 text-xs text-center">
-                <ShieldCheck className="text-violet-500 w-12 h-12 mx-auto animate-pulse" />
-                <div>
-                  <h5 className="font-bold text-slate-200 uppercase tracking-wider">Enter Authorization Code</h5>
-                  <p className="text-slate-400 mt-1">Payment authorization challenge active. Enter OTP to complete order.</p>
+              <div className="space-y-4 text-xs">
+                {/* 3D-Secure Header */}
+                <div className="border-b border-[#222222] pb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="text-violet-400 w-5 h-5" />
+                    <div>
+                      <span className="font-bold text-slate-200 uppercase tracking-wider text-[11px] block">3D-Secure Authentication</span>
+                      <span className="text-[9px] text-slate-500 font-mono">256-Bit Bank Level Protocol</span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono bg-violet-950/60 text-violet-300 px-2 py-0.5 border border-violet-800/40 rounded">
+                    ${pricing.total.toFixed(2)} USD
+                  </span>
                 </div>
-                <input
-                  type="text"
-                  placeholder="124599"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                  className="bg-[#050505] border border-[#222222] px-4 py-2 text-center text-sm font-mono text-slate-300 w-44 mx-auto block outline-none focus:border-violet-500"
-                  id="rzp-otp-input"
-                />
 
-                <button
-                  onClick={verifyOtp}
-                  className="w-full bg-white hover:bg-violet-400 text-black py-2.5 font-bold uppercase tracking-widest text-[10px] transition duration-200"
-                  id="rzp-otp-verify-btn"
-                >
-                  Verify and Authorize
-                </button>
+                {/* Simulated SMS Alert / Sandbox Dispatch Toast */}
+                {demoOtpCode && (
+                  <div className="bg-gradient-to-r from-violet-950/40 via-[#111118] to-violet-950/30 border border-violet-500/30 p-3 rounded text-left space-y-2 relative overflow-hidden">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-violet-300 font-bold text-[10px]">
+                        <Smartphone className="w-3.5 h-3.5" />
+                        <span>SMS Dispatch Simulator</span>
+                      </div>
+                      <span className="text-[9px] text-slate-500 font-mono">Just now</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 font-mono leading-relaxed">
+                      [Bank Security Alert]: Your DevForge AI verification code is <strong className="text-amber-400 text-sm tracking-widest bg-black/60 px-1.5 py-0.5 rounded border border-amber-500/30">{demoOtpCode}</strong>.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOtp(demoOtpCode);
+                        setOtpError('');
+                      }}
+                      className="w-full text-left bg-violet-600/20 hover:bg-violet-600/30 text-violet-300 border border-violet-500/30 px-2.5 py-1.5 rounded text-[10px] font-bold flex items-center justify-between transition"
+                      id="rzp-autofill-otp-btn"
+                    >
+                      <span>⚡ Auto-fill One-Time Code</span>
+                      <span className="font-mono text-white underline">Apply {demoOtpCode}</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Description & Target */}
+                <div className="text-center space-y-1">
+                  <p className="text-slate-300 font-medium">
+                    Enter the 6-digit authorization code sent to
+                  </p>
+                  <p className="text-violet-400 font-mono text-xs font-semibold">
+                    {otpDestination || 'your registered phone/email'}
+                  </p>
+                </div>
+
+                {/* OTP Input Field */}
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    maxLength={6}
+                    placeholder="••••••"
+                    value={otp}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setOtp(val);
+                      if (otpError) setOtpError('');
+                    }}
+                    className="bg-[#050505] border-2 border-[#333333] focus:border-violet-500 px-4 py-3 text-center text-xl tracking-[0.5em] font-mono text-white w-56 mx-auto block outline-none transition rounded shadow-inner"
+                    id="rzp-otp-input"
+                    autoFocus
+                  />
+                  <span className="text-[9px] text-slate-500 font-mono block text-center">
+                    {otp.length}/6 digits entered
+                  </span>
+                </div>
+
+                {/* Error Banner */}
+                {otpError && (
+                  <div className="bg-rose-950/30 border border-rose-500/30 text-rose-300 p-2.5 rounded text-[10px] flex items-center gap-2 text-left">
+                    <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>{otpError}</span>
+                  </div>
+                )}
+
+                {/* Countdown Timer & Resend Option */}
+                <div className="flex items-center justify-between text-[10px] text-slate-400 border-t border-[#222222] pt-3">
+                  <div className="flex items-center gap-1.5 font-mono">
+                    <Clock className="w-3.5 h-3.5 text-slate-500" />
+                    <span>
+                      {otpTimerSeconds > 0 ? (
+                        <>Expires in <strong className="text-slate-200">00:{otpTimerSeconds < 10 ? `0${otpTimerSeconds}` : otpTimerSeconds}</strong></>
+                      ) : (
+                        <span className="text-rose-400">Code expired</span>
+                      )}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleResendOtp}
+                    disabled={isSendingOtp || otpTimerSeconds > 0}
+                    className="text-violet-400 hover:text-violet-300 disabled:text-slate-600 disabled:cursor-not-allowed font-bold underline flex items-center gap-1 transition"
+                    id="rzp-resend-otp-btn"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSendingOtp ? 'animate-spin' : ''}`} />
+                    <span>Resend Code</span>
+                  </button>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="space-y-2 pt-1">
+                  <button
+                    onClick={verifyOtp}
+                    disabled={isVerifyingOtp || otp.length !== 6}
+                    className="w-full bg-white hover:bg-violet-400 disabled:bg-slate-800 disabled:text-slate-500 text-black py-3 font-bold uppercase tracking-widest text-[10px] transition duration-200 flex items-center justify-center gap-2 rounded-none"
+                    id="rzp-otp-verify-btn"
+                  >
+                    {isVerifyingOtp ? (
+                      <>
+                        <span className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                        <span>Validating Security Challenge...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>Verify and Authorize Payment</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCheckoutStep('payment');
+                      setOtpError('');
+                      setOtp('');
+                    }}
+                    className="w-full text-center text-slate-500 hover:text-slate-300 text-[10px] py-1 transition"
+                  >
+                    ← Change Card Credentials
+                  </button>
+                </div>
               </div>
             )}
 
