@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { Project, FileNode, Agent } from '../types';
 import {
   Bot,
@@ -16,7 +16,12 @@ import {
   Download,
   Upload,
   Lock,
-  FileText
+  FileText,
+  Trash2,
+  Edit3,
+  Check,
+  X,
+  Database
 } from 'lucide-react';
 import AgentOrchestrationGraph from '../components/AgentOrchestrationGraph';
 import StreamingPanel from '../components/StreamingPanel';
@@ -25,19 +30,38 @@ import CodeViewer from '../components/CodeViewer';
 import VisualAppBuilder from '../components/VisualAppBuilder';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from '../components/AuthModal';
+import {
+  fetchFirestoreProjectById,
+  saveFirestoreProject,
+  updateFirestoreProjectDetails,
+  listenToFirestoreProject
+} from '../lib/firestoreService';
 
 interface ProjectViewProps {
   projects: Project[];
   onUpdateProjectFiles: (projectId: string, files: FileNode[]) => Promise<void>;
   onTriggerStream: (projectId: string) => Promise<void>;
+  onDeleteProject?: (projectId: string) => Promise<void>;
 }
 
-export default function ProjectView({ projects, onUpdateProjectFiles, onTriggerStream }: ProjectViewProps) {
+export default function ProjectView({
+  projects,
+  onUpdateProjectFiles,
+  onTriggerStream,
+  onDeleteProject
+}: ProjectViewProps) {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'swarm' | 'code' | 'visual' | 'preview'>('swarm');
   const [project, setProject] = useState<Project | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Edit metadata modal
+  const [isEditingDetails, setIsEditingDetails] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editDesc, setEditDesc] = useState('');
 
   // Active files inside workspace
   const [selectedFile, setSelectedFile] = useState<string>('');
@@ -46,13 +70,63 @@ export default function ProjectView({ projects, onUpdateProjectFiles, onTriggerS
   // Local simulated live terminal logs
   const [streamLogs, setStreamLogs] = useState<any[]>([]);
 
+  // 1. Initial Load from Props, Firestore, or Server
+  useEffect(() => {
+    if (!id) return;
+
+    let isMounted = true;
+
+    // Check existing in-memory projects first
+    const found = projects.find((p) => p.id === id);
+    if (found) {
+      setProject(found);
+      setEditName(found.name);
+      setEditDesc(found.description || found.prompt);
+      if (found.files && found.files.length > 0) {
+        setSelectedFile(found.files[0].path);
+        setFileContent(found.files[0].content || '');
+      }
+    }
+
+    // Fetch from Firestore directly for freshness
+    fetchFirestoreProjectById(id).then((fsProj) => {
+      if (isMounted && fsProj) {
+        setProject(fsProj);
+        setEditName(fsProj.name);
+        setEditDesc(fsProj.description || fsProj.prompt);
+        if (fsProj.files && fsProj.files.length > 0 && !selectedFile) {
+          setSelectedFile(fsProj.files[0].path);
+          setFileContent(fsProj.files[0].content || '');
+        }
+      }
+    });
+
+    // Subscribe to real-time Firestore changes
+    const unsubscribe = listenToFirestoreProject(id, (updated) => {
+      if (isMounted && updated) {
+        setProject((prev) => ({ ...prev, ...updated }));
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [id, projects]);
+
+  // 2. Poll server for live multi-agent swarm synthesis updates
   const refreshProjectData = async () => {
     if (!id) return;
     try {
       const res = await fetch(`/api/projects/${id}`);
       if (res.ok) {
-        const data = await res.json();
+        const data: Project = await res.json();
         setProject(data);
+
+        // If the project state progressed, persist full snapshot to Firestore
+        if (user && data.status) {
+          await saveFirestoreProject(data, user.uid);
+        }
       }
       const streamRes = await fetch(`/api/projects/${id}/stream`);
       if (streamRes.ok) {
@@ -66,35 +140,25 @@ export default function ProjectView({ projects, onUpdateProjectFiles, onTriggerS
     }
   };
 
-  // Find project on mount or parameter changes
   useEffect(() => {
-    const found = projects.find((p) => p.id === id);
-    if (found) {
-      setProject(found);
-
-      // Select first file by default if files exist
-      if (found.files && found.files.length > 0) {
-        setSelectedFile(found.files[0].path);
-        setFileContent(found.files[0].content || '');
-      }
-    }
-
     refreshProjectData();
-    const interval = setInterval(refreshProjectData, 2000);
+    const interval = setInterval(refreshProjectData, 2500);
     return () => clearInterval(interval);
-  }, [id, projects]);
+  }, [id, user]);
 
   if (!project) {
     return (
       <div className="max-w-7xl mx-auto px-6 py-20 text-center space-y-4 text-slate-100">
         <AlertTriangle className="h-12 w-12 text-rose-500 mx-auto" />
-        <h3 className="text-xl font-bold text-slate-200">Workspace Container offline</h3>
-        <p className="text-sm text-slate-500">The SRE container sandbox mapping this project ID could not be loaded.</p>
+        <h3 className="text-xl font-bold text-slate-200">Workspace Container Not Found</h3>
+        <p className="text-sm text-slate-500">
+          The project could not be found or you may not have permissions to access it.
+        </p>
         <Link
           to="/projects"
-          className="inline-block bg-slate-900 hover:bg-slate-850 text-slate-200 text-xs px-4 py-2 rounded-xl border border-slate-800 font-bold transition"
+          className="inline-block bg-white hover:bg-violet-400 text-black text-xs px-4 py-2 font-bold uppercase tracking-wider transition"
         >
-          Return to Dashboard
+          Return to Projects
         </Link>
       </div>
     );
@@ -121,7 +185,7 @@ export default function ProjectView({ projects, onUpdateProjectFiles, onTriggerS
       {
         timestamp: now,
         agent: 'SRE Monitor',
-        message: `Integrity save: ${path.split('/').pop()} compiled and synced inside sandbox.`,
+        message: `Integrity save: ${path.split('/').pop()} synced to Firestore & sandbox.`,
         type: 'info',
       },
     ]);
@@ -148,10 +212,41 @@ export default function ProjectView({ projects, onUpdateProjectFiles, onTriggerS
       {
         timestamp: now,
         agent: 'SRE Storage',
-        message: `Uploaded file ${path} successfully synced to project workspace.`,
+        message: `Uploaded file ${path} successfully synced to Firestore.`,
         type: 'success',
       },
     ]);
+  };
+
+  const handleSaveProjectDetails = async () => {
+    if (!project) return;
+    try {
+      await updateFirestoreProjectDetails(project.id, {
+        name: editName,
+        description: editDesc,
+      });
+      setProject((prev) => (prev ? { ...prev, name: editName, description: editDesc } : prev));
+      setIsEditingDetails(false);
+    } catch (e) {
+      console.error('Error updating project details:', e);
+    }
+  };
+
+  const handleDeleteThisProject = async () => {
+    if (!confirm(`Are you sure you want to delete "${project.name}"? This action cannot be undone.`)) {
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      if (onDeleteProject) {
+        await onDeleteProject(project.id);
+      }
+      navigate('/projects');
+    } catch (e) {
+      console.error('Error deleting project:', e);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleDownloadProjectBundle = () => {
@@ -210,35 +305,57 @@ export default function ProjectView({ projects, onUpdateProjectFiles, onTriggerS
           </Link>
           <div>
             <div className="flex items-center space-x-2">
-              <span className="label text-[9px] text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5">
-                CONTAINER ACTIVE
+              <span className="label text-[9px] text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 flex items-center gap-1">
+                <Database className="w-2.5 h-2.5 text-violet-400" />
+                <span>FIRESTORE SYNCED</span>
               </span>
               <span className="text-[10px] font-mono text-slate-500 font-bold uppercase tracking-wider">
                 ID: {project.id}
               </span>
             </div>
-            <h1 className="massive-type text-4xl text-white mt-1 uppercase tracking-wide">{project.name}</h1>
+            <div className="flex items-center space-x-2 mt-1">
+              <h1 className="massive-type text-3xl md:text-4xl text-white uppercase tracking-wide">
+                {project.name}
+              </h1>
+              <button
+                onClick={() => setIsEditingDetails(true)}
+                title="Edit Project Details"
+                className="p-1 text-slate-500 hover:text-white transition"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Right workspace actions */}
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
             onClick={handleDownloadProjectBundle}
-            className="bg-[#111111] hover:bg-[#1a1a1a] border border-[#222222] text-slate-300 text-[10px] uppercase tracking-widest font-bold px-4 py-2.5 transition duration-200 flex items-center space-x-1.5"
+            className="bg-[#111111] hover:bg-[#1a1a1a] border border-[#222222] text-slate-300 text-[10px] uppercase tracking-widest font-bold px-3.5 py-2.5 transition duration-200 flex items-center space-x-1.5"
             id="download-workspace-bundle-btn"
           >
             <Download className="w-3.5 h-3.5 text-violet-400" />
-            <span>Download Bundle</span>
+            <span>Export Bundle</span>
           </button>
 
           <button
             onClick={runReBuild}
-            className="bg-[#111111] hover:bg-[#1a1a1a] border border-[#222222] text-slate-300 text-[10px] uppercase tracking-widest font-bold px-4 py-2.5 transition duration-200"
+            className="bg-[#111111] hover:bg-[#1a1a1a] border border-[#222222] text-slate-300 text-[10px] uppercase tracking-widest font-bold px-3.5 py-2.5 transition duration-200"
             id="rebuild-swarm-btn"
           >
             <RefreshCw className="w-3.5 h-3.5 inline mr-1.5" />
-            <span>Rebuild Container</span>
+            <span>Rebuild Swarm</span>
+          </button>
+
+          <button
+            onClick={handleDeleteThisProject}
+            disabled={isDeleting}
+            className="bg-[#111111] hover:bg-rose-950/40 border border-[#222222] hover:border-rose-800 text-slate-400 hover:text-rose-400 text-[10px] uppercase tracking-widest font-bold px-3.5 py-2.5 transition duration-200 flex items-center space-x-1.5"
+            id="delete-workspace-btn"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+            <span>{isDeleting ? 'Deleting...' : 'Delete'}</span>
           </button>
 
           {project.status === 'deployed' && (
@@ -248,11 +365,67 @@ export default function ProjectView({ projects, onUpdateProjectFiles, onTriggerS
               id="open-sandbox-btn"
             >
               <Globe className="w-3.5 h-3.5 inline mr-1.5" />
-              <span>Launch Live Sandbox</span>
+              <span>Launch Sandbox</span>
             </button>
           )}
         </div>
       </div>
+
+      {/* Edit Details Modal */}
+      {isEditingDetails && (
+        <div className="bg-[#111111] border border-violet-500/40 p-5 space-y-4 shadow-2xl">
+          <div className="flex items-center justify-between border-b border-[#222222] pb-3">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
+              <Edit3 className="w-4 h-4 text-violet-400" />
+              <span>Edit Project Name & Description</span>
+            </span>
+            <button
+              onClick={() => setIsEditingDetails(false)}
+              className="text-slate-500 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-400 mb-1">
+                Project Name
+              </label>
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="w-full bg-[#050505] border border-[#222222] px-3 py-2 text-xs text-white outline-none focus:border-violet-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-400 mb-1">
+                Description
+              </label>
+              <input
+                type="text"
+                value={editDesc}
+                onChange={(e) => setEditDesc(e.target.value)}
+                className="w-full bg-[#050505] border border-[#222222] px-3 py-2 text-xs text-white outline-none focus:border-violet-500"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end space-x-2 pt-2">
+            <button
+              onClick={() => setIsEditingDetails(false)}
+              className="px-4 py-1.5 text-xs text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSaveProjectDetails}
+              className="bg-white hover:bg-violet-400 text-black px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition"
+            >
+              Save to Firestore
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tabs list bar */}
       <div className="flex items-center space-x-2 bg-[#111111] p-1 border border-[#222222] self-start text-[10px] font-bold uppercase tracking-widest w-fit">
@@ -372,7 +545,7 @@ export default function ProjectView({ projects, onUpdateProjectFiles, onTriggerS
                 <span className="label text-[9px] text-indigo-400 mb-1">Sandbox Preview</span>
                 <h3 className="text-3xl font-bold uppercase tracking-wider text-white mt-1">{project.name}</h3>
                 <p className="text-xs text-slate-400 mt-2 leading-relaxed uppercase tracking-wider text-[10px]">
-                  {project.description}
+                  {project.description || project.prompt}
                 </p>
               </div>
 

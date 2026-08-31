@@ -22,6 +22,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import {
   fetchFirestoreProjects,
   saveFirestoreProject,
+  deleteFirestoreProject,
   updateFirestoreProjectFiles,
   saveFirestoreTransaction,
   fetchFirestoreTransactions,
@@ -78,15 +79,7 @@ function AppContent() {
 
         // 2. Load Projects from Firestore
         const firestoreProjs = await fetchFirestoreProjects(user?.uid);
-        if (firestoreProjs.length > 0) {
-          setProjects(firestoreProjs);
-        } else {
-          try {
-            const projectsRes = await fetch('/api/projects');
-            const projectsData = await projectsRes.json();
-            if (Array.isArray(projectsData)) setProjects(projectsData);
-          } catch (e) {}
-        }
+        setProjects(firestoreProjs);
 
         // 3. Transactions (Firestore for current user)
         if (user) {
@@ -185,7 +178,39 @@ function AppContent() {
     }
   };
 
-  // 3. Re-Trigger manual agent stream build
+  // 3. Delete Project
+  const handleDeleteProject = async (projectId: string) => {
+    try {
+      await deleteFirestoreProject(projectId);
+      try {
+        await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+      } catch (e) {}
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    } catch (err) {
+      console.error('Error deleting project:', err);
+    }
+  };
+
+  // 4. Duplicate Project
+  const handleDuplicateProject = async (proj: Project) => {
+    try {
+      const newId = `proj_${Math.random().toString(36).substring(2, 9)}`;
+      const duplicated: Project = {
+        ...proj,
+        id: newId,
+        name: `${proj.name} (Copy)`,
+        createdAt: new Date().toISOString(),
+      };
+      if (user) {
+        await saveFirestoreProject(duplicated, user.uid);
+      }
+      setProjects((prev) => [duplicated, ...prev]);
+    } catch (err) {
+      console.error('Error duplicating project:', err);
+    }
+  };
+
+  // 5. Re-Trigger manual agent stream build
   const handleTriggerStream = async (projectId: string) => {
     try {
       const res = await fetch(`/api/projects/${projectId}/stream`);
@@ -423,7 +448,16 @@ function AppContent() {
         <Route path="/" element={<ProjectIntake onSubmit={handleForgeProject} />} />
 
         {/* List of projects dashboard */}
-        <Route path="/projects" element={<ProjectDashboard projects={projects} />} />
+        <Route
+          path="/projects"
+          element={
+            <ProjectDashboard
+              projects={projects}
+              onDeleteProject={handleDeleteProject}
+              onDuplicateProject={handleDuplicateProject}
+            />
+          }
+        />
 
         {/* Project workspace with swarm logs, code files, visual builder, live preview iframe */}
         <Route
@@ -433,6 +467,7 @@ function AppContent() {
               projects={projects}
               onUpdateProjectFiles={handleUpdateProjectFiles}
               onTriggerStream={handleTriggerStream}
+              onDeleteProject={handleDeleteProject}
             />
           }
         />

@@ -208,10 +208,24 @@ export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]
     snap.forEach((d) => {
       results.push({ id: d.id, ...d.data() } as Project);
     });
-    return results;
+    return results.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
   } catch (e) {
     console.warn('Error fetching projects from Firestore:', e);
     return [];
+  }
+};
+
+export const fetchFirestoreProjectById = async (projectId: string): Promise<Project | null> => {
+  try {
+    const docRef = doc(db, 'projects', projectId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return { id: snap.id, ...snap.data() } as Project;
+    }
+    return null;
+  } catch (e) {
+    console.warn('Error fetching project by id from Firestore:', e);
+    return null;
   }
 };
 
@@ -229,6 +243,15 @@ export const saveFirestoreProject = async (project: Project, userId?: string) =>
   }
 };
 
+export const deleteFirestoreProject = async (projectId: string) => {
+  try {
+    const docRef = doc(db, 'projects', projectId);
+    await deleteDoc(docRef);
+  } catch (e) {
+    console.warn('Error deleting project from Firestore:', e);
+  }
+};
+
 export const updateFirestoreProjectFiles = async (projectId: string, files: FileNode[]) => {
   try {
     if (!auth.currentUser) {
@@ -239,6 +262,19 @@ export const updateFirestoreProjectFiles = async (projectId: string, files: File
     await updateDoc(docRef, { files, updatedAt: new Date().toISOString() });
   } catch (e) {
     console.warn('Error updating project files in Firestore:', e);
+  }
+};
+
+export const updateFirestoreProjectDetails = async (
+  projectId: string,
+  updates: Partial<Pick<Project, 'name' | 'description' | 'status' | 'deployedUrl'>>
+) => {
+  try {
+    if (!auth.currentUser) return;
+    const docRef = doc(db, 'projects', projectId);
+    await updateDoc(docRef, { ...updates, updatedAt: new Date().toISOString() });
+  } catch (e) {
+    console.warn('Error updating project details in Firestore:', e);
   }
 };
 

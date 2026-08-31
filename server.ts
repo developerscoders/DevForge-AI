@@ -38,261 +38,7 @@ function getGeminiClient(): GoogleGenAI | null {
 
 // In-Memory Database / Store
 const db = {
-  projects: [
-    {
-      id: 'proj_sample_1',
-      name: 'OmniTask AI',
-      description: 'An autonomous multi-agent task organizer and scheduler built on React.',
-      prompt: 'Build a productivity scheduler that uses AI to prioritize daily developer tasks.',
-      status: 'deployed',
-      createdAt: new Date(Date.now() - 48 * 3600 * 1000).toISOString(),
-      aiCreditsUsed: 1200,
-      deployedUrl: 'https://omnitask-sample.devforge.ai',
-      modelConfig: {
-        'CEO Orchestrator': 'gemini-2.5-flash',
-        'Product Manager': 'anthropic/claude-3.5-sonnet',
-        'Solution Architect': 'openai/gpt-4o-mini',
-        'Frontend Engineer': 'meta/llama-3.1-70b-instruct',
-        'QA/Test Engineer': 'llama-3.3-70b-versatile',
-        'DevOps Engineer': 'mixtral-8x7b-32768',
-      },
-      files: [
-        {
-          path: 'src/App.tsx',
-          name: 'App.tsx',
-          type: 'file',
-          content: `import React, { useState } from 'react';
-import { Calendar, CheckCircle, Clock, AlertCircle } from 'lucide-react';
-
-export default function App() {
-  const [tasks, setTasks] = useState([
-    { id: 1, title: 'Refactor database models', priority: 'High', status: 'Pending' },
-    { id: 2, title: 'Integrate Razorpay client SDK', priority: 'Critical', status: 'Completed' },
-    { id: 3, title: 'Implement security audit logging', priority: 'Medium', status: 'Pending' }
-  ]);
-
-  return (
-    <div className="min-h-screen bg-slate-950 text-white p-8 font-sans">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <header className="flex items-center justify-between border-b border-slate-800 pb-6">
-          <div>
-            <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-indigo-500">OmniTask AI</h1>
-            <p className="text-sm text-slate-400">Autonomous task organizer running optimized schedule algorithms</p>
-          </div>
-          <div className="flex space-x-2 text-xs text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-full border border-indigo-500/20 font-mono">
-            <span>AI ENGINE ONLINE</span>
-          </div>
-        </header>
-
-        <section className="grid md:grid-cols-3 gap-4">
-          <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center space-x-3">
-            <Calendar className="text-violet-400 h-6 w-6" />
-            <div>
-              <div className="text-xs text-slate-400">Today's Focus</div>
-              <div className="text-lg font-bold">Priority Alignment</div>
-            </div>
-          </div>
-          <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center space-x-3">
-            <Clock className="text-cyan-400 h-6 w-6" />
-            <div>
-              <div className="text-xs text-slate-400">Estimated Effort</div>
-              <div className="text-lg font-bold">4.5 Hours</div>
-            </div>
-          </div>
-          <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center space-x-3">
-            <CheckCircle className="text-emerald-400 h-6 w-6" />
-            <div>
-              <div className="text-xs text-slate-400">Completed Tasks</div>
-              <div className="text-lg font-bold">1 / 3 Tasks</div>
-            </div>
-          </div>
-        </section>
-
-        <main className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <AlertCircle className="text-violet-400 w-5 h-5" />
-            Suggested Task Priorities (Sorted by SRE latency critical path)
-          </h2>
-          <div className="space-y-3">
-            {tasks.map(task => (
-              <div key={task.id} className="flex items-center justify-between bg-slate-950 p-4 rounded-lg border border-slate-850 hover:border-slate-700 transition">
-                <div className="flex items-center space-x-3">
-                  <input type="checkbox" checked={task.status === 'Completed'} className="rounded border-slate-800 bg-slate-900 text-indigo-500 focus:ring-0" readOnly />
-                  <span className={task.status === 'Completed' ? 'line-through text-slate-500' : 'text-slate-200'}>{task.title}</span>
-                </div>
-                <div className="flex items-center space-x-3 text-xs">
-                  <span className={\`px-2 py-0.5 rounded font-mono \${task.priority === 'Critical' ? 'bg-rose-500/20 text-rose-400' : task.priority === 'High' ? 'bg-amber-500/20 text-amber-400' : 'bg-indigo-500/20 text-indigo-400'}\`}>
-                    {task.priority}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-}
-`
-        },
-        {
-          path: 'package.json',
-          name: 'package.json',
-          type: 'file',
-          content: `{
-  "name": "omnitask-ai",
-  "version": "1.0.0",
-  "dependencies": {
-    "react": "^19.0.0",
-    "lucide-react": "^0.450.0"
-  }
-}`
-        },
-        {
-          path: 'README.md',
-          name: 'README.md',
-          type: 'file',
-          content: `# OmniTask AI
-
-An autonomous scheduler generated on DevForge AI.
-
-## Architecture
-- Client: React + Tailwind CSS
-- UI Icons: Lucide React
-- Deployment Target: Cloud Run container
-`
-        }
-      ],
-      agents: [
-        {
-          id: 'ag_ceo',
-          name: 'Aria CEO',
-          role: 'Chief AI Executive & Orchestrator',
-          tier: 'ceo',
-          provider: 'gemini',
-          status: 'complete',
-          avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=80&fit=crop&q=60',
-          model: 'gemini-2.5-flash',
-          currentTask: 'Validated all milestone deliverables and certified container integrity',
-          validationStatus: 'validated',
-          ceoDirectives: [
-            '1. Deconstruct prompt intent into PRD, Architecture, Code, QA, and SRE milestones',
-            '2. Continuously audit subagents for regressions and dispatch self-healing guidance',
-            '3. Final executive sign-off for container deployment'
-          ],
-          outputLogs: [
-            { timestamp: '08:59:40', message: '[CEO Strategic Directive] Project initialized. Delegating PRD scoping to Senior PM Parker.', type: 'info' },
-            { timestamp: '09:00:20', message: '[CEO Milestone Review] PRD specifications and acceptance matrix APPROVED.', type: 'success' },
-            { timestamp: '09:01:00', message: '[CEO Milestone Review] System Architecture & schema models APPROVED.', type: 'success' },
-            { timestamp: '09:01:45', message: '[CEO Self-Healing Intervention] Subagent JSX state alert detected. Sent corrective patch instructions to Senior Frontend Frank.', type: 'warning' },
-            { timestamp: '09:02:00', message: '[CEO Milestone Review] Re-validated healed frontend code bundle. 100% APPROVED.', type: 'success' },
-            { timestamp: '09:02:30', message: '[CEO Executive Sign-off] Ingress certification passed. Container active.', type: 'success' }
-          ]
-        },
-        {
-          id: 'ag_pm',
-          name: 'Parker Lead',
-          role: 'Senior Product Manager',
-          tier: 'senior',
-          provider: 'openrouter',
-          status: 'complete',
-          avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=80&fit=crop&q=60',
-          model: 'anthropic/claude-3.5-sonnet',
-          currentTask: 'Supervised product scope and user persona synthesis',
-          validationStatus: 'validated',
-          subagents: [
-            { id: 'sub_pm_1', name: 'Spec Writer', role: 'PRD Modeler', task: 'Write core feature breakdown & entities', status: 'complete', instructionsReceived: ['Focus on task priority algorithms and developer productivity metrics.'], model: 'anthropic/claude-3.5-sonnet' },
-            { id: 'sub_pm_2', name: 'User Flow Synthesizer', role: 'UX Analyst', task: 'Synthesize edge-case user interactions', status: 'complete', instructionsReceived: ['Ensure mobile touch responsiveness in task list actions.'], model: 'anthropic/claude-3.5-sonnet' }
-          ],
-          outputLogs: [
-            { timestamp: '09:00:00', message: 'Assigned Spec Writer subagent to draft comprehensive requirements.', type: 'info' },
-            { timestamp: '09:00:15', message: 'All subagent user flows synthesized. Submitted PRD to CEO Aria for executive validation.', type: 'success' }
-          ]
-        },
-        {
-          id: 'ag_arch',
-          name: 'Sophia Lead',
-          role: 'Senior Solution Architect',
-          tier: 'senior',
-          provider: 'openrouter',
-          status: 'complete',
-          avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=80&fit=crop&q=60',
-          model: 'openai/gpt-4o-mini',
-          currentTask: 'Designed serverless architecture and REST schema models',
-          validationStatus: 'validated',
-          subagents: [
-            { id: 'sub_arch_1', name: 'Data Schema Modeler', role: 'DB Architect', task: 'Design TypeScript schemas and task model interfaces', status: 'complete', instructionsReceived: ['Use strict non-null typing on priority enum.'], model: 'openai/gpt-4o-mini' },
-            { id: 'sub_arch_2', name: 'API Contract Validator', role: 'API Architect', task: 'Validate REST endpoint signatures and security headers', status: 'complete', instructionsReceived: ['Include SHA-256 idempotency key support.'], model: 'openai/gpt-4o-mini' }
-          ],
-          outputLogs: [
-            { timestamp: '09:00:30', message: 'Instructed Data Schema subagent to build type-safe contract interfaces.', type: 'info' },
-            { timestamp: '09:00:50', message: 'API contract verified. Architecture signed off by CEO Aria.', type: 'success' }
-          ]
-        },
-        {
-          id: 'ag_fe',
-          name: 'Frank Lead',
-          role: 'Senior Frontend Engineer',
-          tier: 'senior',
-          provider: 'nvidia',
-          status: 'complete',
-          avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=80&fit=crop&q=60',
-          model: 'meta/llama-3.1-70b-instruct',
-          currentTask: 'Constructed React + Tailwind CSS single-screen UI',
-          validationStatus: 'validated',
-          subagents: [
-            { id: 'sub_fe_1', name: 'Component Tree Builder', role: 'React Developer', task: 'Construct task list, priority tags & stats widgets', status: 'complete', instructionsReceived: ['Implement clean Tailwind styling without unnecessary nesting.'], healingSummary: 'Auto-healed state binding handler based on CEO guidance.', model: 'meta/llama-3.1-70b-instruct' },
-            { id: 'sub_fe_2', name: 'Interactive State Polisher', role: 'UI Engineer', task: 'Integrate checkbox state transitions and Lucide icons', status: 'complete', instructionsReceived: ['Add optimistic UI toggle on task completion.'], model: 'meta/llama-3.1-70b-instruct' }
-          ],
-          outputLogs: [
-            { timestamp: '09:01:10', message: 'Instructed Component Builder subagent to assemble React components.', type: 'info' },
-            { timestamp: '09:01:35', message: '[Self-Healing] Subagent caught state binding warning. Applied CEO patch instructions.', type: 'warning' },
-            { timestamp: '09:01:50', message: 'Component tree healed & fully styled in Tailwind CSS. Passed CEO review.', type: 'success' }
-          ]
-        },
-        {
-          id: 'ag_qa',
-          name: 'Quinn Lead',
-          role: 'Senior QA & Testing Lead',
-          tier: 'senior',
-          provider: 'groq',
-          status: 'complete',
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&fit=crop&q=60',
-          model: 'llama-3.3-70b-versatile',
-          currentTask: 'Executed automated unit tests and integrity assertions',
-          validationStatus: 'validated',
-          subagents: [
-            { id: 'sub_qa_1', name: 'Unit Test Runner', role: 'Test Engineer', task: 'Run unit test assertions on priority sorting', status: 'complete', instructionsReceived: ['Test sorting with high, medium, and critical task queues.'], model: 'llama-3.3-70b-versatile' },
-            { id: 'sub_qa_2', name: 'Integration & Edge Verifier', role: 'Security Auditor', task: 'Probe XSS sanitization and OWASP Top 10 rules', status: 'complete', instructionsReceived: ['Verify input boundary characters in task title.'], model: 'llama-3.3-70b-versatile' }
-          ],
-          outputLogs: [
-            { timestamp: '09:02:10', message: 'Running automated test suites across all 4 critical paths.', type: 'info' },
-            { timestamp: '09:02:25', message: '0 failed tests. 100% integrity verification confirmed to CEO Aria.', type: 'success' }
-          ]
-        },
-        {
-          id: 'ag_sre',
-          name: 'Devon Lead',
-          role: 'Senior DevOps & SRE Lead',
-          tier: 'senior',
-          provider: 'groq',
-          status: 'complete',
-          avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=80&fit=crop&q=60',
-          model: 'mixtral-8x7b-32768',
-          currentTask: 'Configured Docker builder and routed ingress ports',
-          validationStatus: 'validated',
-          subagents: [
-            { id: 'sub_sre_1', name: 'Docker Container Builder', role: 'DevOps Engineer', task: 'Build container assets & map port 3000 ingress', status: 'complete', instructionsReceived: ['Set node production environment flags.'], model: 'mixtral-8x7b-32768' },
-            { id: 'sub_sre_2', name: 'Ingress & Self-Healing Daemon', role: 'SRE Specialist', task: 'Initialize automated heartbeat and watchdog monitors', status: 'complete', instructionsReceived: ['Maintain continuous health probe on /api/health.'], model: 'mixtral-8x7b-32768' }
-          ],
-          outputLogs: [
-            { timestamp: '09:02:35', message: 'Docker image built and container port :3000 mapped.', type: 'info' },
-            { timestamp: '09:02:50', message: 'Ingress routing active. Live sandbox deployed successfully.', type: 'success' }
-          ]
-        }
-      ]
-    }
-  ],
+  projects: [] as any[],
   transactions: [
     { id: 'txn_init_1', date: '2026-07-08T14:22:00Z', amount: 49, planName: 'Starter Plan', status: 'success', invoiceNumber: 'INV-2026-001', taxAmount: 7.47, totalAmount: 49.00, couponUsed: 'WELCOME10' },
     { id: 'txn_init_2', date: '2026-07-09T09:15:30Z', amount: 15, planName: '1,500 AI Credits', status: 'success', invoiceNumber: 'INV-2026-002', taxAmount: 2.29, totalAmount: 15.00 }
@@ -342,6 +88,11 @@ const activeSreStreams: Record<string, any[]> = {};
 
 // 1. Projects Fetching
 app.get('/api/projects', (req, res) => {
+  const { userId } = req.query;
+  if (userId) {
+    const userProjects = db.projects.filter((p: any) => p.userId === userId || !p.userId);
+    return res.json(userProjects);
+  }
   res.json(db.projects);
 });
 
@@ -349,6 +100,27 @@ app.get('/api/projects/:id', (req, res) => {
   const project = db.projects.find(p => p.id === req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   res.json(project);
+});
+
+app.delete('/api/projects/:id', (req, res) => {
+  const index = db.projects.findIndex(p => p.id === req.params.id);
+  if (index !== -1) {
+    db.projects.splice(index, 1);
+    delete activeSreStreams[req.params.id];
+    return res.json({ success: true, message: 'Project deleted' });
+  }
+  res.status(404).json({ error: 'Project not found' });
+});
+
+app.put('/api/projects/:id', (req, res) => {
+  const project = db.projects.find(p => p.id === req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const { name, description, status, deployedUrl } = req.body;
+  if (name) project.name = name;
+  if (description) project.description = description;
+  if (status) project.status = status;
+  if (deployedUrl) project.deployedUrl = deployedUrl;
+  res.json({ success: true, project });
 });
 
 // 2. Project Creation (Hierarchical Multi-Agent Swarm with CEO Validation & Multi-Model Routing)
@@ -482,14 +254,15 @@ app.post('/api/projects', async (req, res) => {
         outputLogs: []
       }
     ],
-    deployedUrl: ''
+    deployedUrl: '',
+    userId: req.body.userId || undefined
   };
 
   db.projects.push(initialProject);
   db.activeSubscription.creditsRemaining = Math.max(0, db.activeSubscription.creditsRemaining - 350);
 
-  // Send back project ID immediately so client can navigate to /projects/:id and see live stream
-  res.json({ id: projectId });
+  // Send back full initial project so client can immediately render and persist to Firestore
+  res.json(initialProject);
 
   // Stream logs storage
   const streamLogs: any[] = [];
