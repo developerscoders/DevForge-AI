@@ -151,10 +151,6 @@ export default function BillingDashboard({
   };
 
   const openPlanCheckout = (plan: SubscriptionPlan) => {
-    if (!user) {
-      setShowAuthModal(true);
-      return;
-    }
     setSelectedPlan(plan);
     setExtraCreditsAmount(null);
     setCheckoutStep('details');
@@ -162,10 +158,6 @@ export default function BillingDashboard({
   };
 
   const openCreditsCheckout = (amount: number) => {
-    if (!user) {
-      setShowAuthModal(true);
-      return;
-    }
     setExtraCreditsAmount(amount);
     setSelectedPlan(null);
     setCheckoutStep('details');
@@ -526,20 +518,29 @@ export default function BillingDashboard({
         <div className="lg:col-span-4 bg-[#111111] border border-[#222222] p-6 flex flex-col justify-between shadow-2xl h-80">
           <div>
             <span className="label block">Tenant Subscription Balance</span>
-            <h2 className="text-xl font-bold uppercase tracking-wider mt-2 text-white">
-              {user ? activeSub.planName : 'Guest Session (Read-Only)'}
-            </h2>
+            <div className="flex items-center gap-2 mt-2">
+              <h2 className="text-xl font-bold uppercase tracking-wider text-white">
+                {profile?.planName || activeSub.planName || 'Free Tier'}
+              </h2>
+              <span className={`text-[9px] px-2 py-0.5 font-mono uppercase font-bold border ${
+                (profile?.planId || activeSub.planId) !== 'free'
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}>
+                {(profile?.planId || activeSub.planId) !== 'free' ? 'PREMIUM ACTIVE' : 'FREE TIER'}
+              </span>
+            </div>
             <div className="text-slate-500 font-mono text-[10px] mt-1">
-              RENEWAL: {user ? activeSub.nextRenewal : 'Sign in to configure'}
+              RENEWAL: {profile?.nextRenewal || activeSub.nextRenewal || '2026-10-01'}
             </div>
 
             {/* Balances */}
             <div className="mt-6 flex flex-col">
               <span className="stat-value text-white">
-                {user ? activeSub.creditsRemaining.toLocaleString() : '0'}
+                {(profile?.creditsRemaining ?? activeSub.creditsRemaining ?? 500).toLocaleString()}
               </span>
               <span className="label text-[9px] mt-1 text-slate-500">
-                / {user ? activeSub.creditsTotal.toLocaleString() : '0'} Compute Credits
+                / {(profile?.creditsTotal ?? activeSub.creditsTotal ?? 500).toLocaleString()} Compute Credits
               </span>
             </div>
           </div>
@@ -619,7 +620,8 @@ export default function BillingDashboard({
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
           {plans.map((p) => {
             const isPro = p.id === 'pro';
-            const isActive = user ? activeSub.planId === p.id : p.id === 'free';
+            const currentPlanId = profile?.planId || activeSub.planId || 'free';
+            const isActive = currentPlanId === p.id;
             const price = billingCycle === 'yearly' ? p.priceYearly : p.priceMonthly;
             const cycleText = billingCycle === 'yearly' ? '/year' : '/mo';
 
@@ -627,13 +629,13 @@ export default function BillingDashboard({
               <div
                 key={p.id}
                 className={`plan-card p-6 flex flex-col justify-between h-[440px] relative transition duration-300 ${
-                  isActive ? 'active' : 'opacity-75 hover:opacity-100'
+                  isActive ? 'active ring-2 ring-violet-500/50' : 'opacity-75 hover:opacity-100'
                 }`}
                 id={`plan-card-${p.id}`}
               >
                 {isActive && (
-                  <span className="absolute top-3 right-3 bg-violet-600 text-[8px] px-2 py-0.5 uppercase font-bold tracking-widest text-white">
-                    CURRENT
+                  <span className="absolute top-3 right-3 bg-violet-600 text-[8px] px-2 py-0.5 uppercase font-bold tracking-widest text-white shadow-md">
+                    CURRENT PLAN
                   </span>
                 )}
 
@@ -659,17 +661,18 @@ export default function BillingDashboard({
                 </div>
 
                 <button
-                  onClick={() => p.priceMonthly > 0 && openPlanCheckout(p)}
+                  onClick={() => p.priceMonthly > 0 && !isActive && openPlanCheckout(p)}
+                  disabled={isActive}
                   className={`w-full py-2.5 text-[10px] font-bold uppercase tracking-widest transition duration-200 flex items-center justify-center space-x-1.5 ${
                     isActive
-                      ? 'bg-transparent text-slate-500 border border-[#222222] cursor-default'
+                      ? 'bg-violet-950/40 text-violet-300 border border-violet-800/60 cursor-default font-mono'
                       : isPro
                       ? 'bg-white text-black hover:bg-violet-400'
                       : 'bg-[#050505] hover:bg-white/5 text-slate-300 border border-[#222222]'
                   }`}
                   id={`upgrade-btn-${p.id}`}
                 >
-                  <span>{isActive ? 'Active Plan' : !user ? 'Sign In to Upgrade' : 'Upgrade Plan'}</span>
+                  <span>{isActive ? '✓ Active Tier' : 'Upgrade Plan'}</span>
                   {!isActive && p.priceMonthly > 0 && <ArrowRight className="w-3.5 h-3.5" />}
                 </button>
               </div>

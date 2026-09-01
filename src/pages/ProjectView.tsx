@@ -23,7 +23,9 @@ import {
   X,
   Database,
   Layers,
-  Sparkles
+  Sparkles,
+  ExternalLink,
+  Copy
 } from 'lucide-react';
 import AgentOrchestrationGraph from '../components/AgentOrchestrationGraph';
 import StreamingPanel from '../components/StreamingPanel';
@@ -64,6 +66,16 @@ export default function ProjectView({
   const [activeTab, setActiveTab] = useState<'swarm' | 'code' | 'visual' | 'preview'>('swarm');
   const [project, setProject] = useState<Project | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
+
+  const livePreviewUrl = project?.id ? `${window.location.origin}/preview/${project.id}` : '';
+
+  const handleCopyLiveUrl = () => {
+    if (!livePreviewUrl) return;
+    navigator.clipboard.writeText(livePreviewUrl);
+    setCopiedUrl(true);
+    setTimeout(() => setCopiedUrl(false), 2000);
+  };
 
   // Edit metadata modal
   const [isEditingDetails, setIsEditingDetails] = useState(false);
@@ -452,6 +464,41 @@ export default function ProjectView({
           </div>
         </div>
       )}
+
+      {/* Live Preview Direct Access Ribbon */}
+      <div className="bg-[#121215] border border-violet-500/30 p-3 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+        <div className="flex items-center space-x-3 truncate">
+          <div className="flex items-center space-x-1.5 text-emerald-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
+            <span className="font-bold uppercase text-[10px]">Live URL:</span>
+          </div>
+          <span className="text-slate-200 bg-[#08080a] border border-[#27272a] px-2.5 py-1 text-[11px] select-all truncate">
+            {livePreviewUrl}
+          </span>
+        </div>
+
+        <div className="flex items-center space-x-2 shrink-0">
+          <button
+            onClick={handleCopyLiveUrl}
+            className="bg-[#1c1c20] hover:bg-[#25252b] border border-[#333] text-slate-200 hover:text-white px-3 py-1 text-[10px] uppercase font-bold transition flex items-center space-x-1.5"
+            title="Copy Live Preview URL"
+          >
+            {copiedUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+            <span>{copiedUrl ? 'Copied URL!' : 'Copy URL'}</span>
+          </button>
+
+          <a
+            href={livePreviewUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bg-white hover:bg-violet-400 text-black px-3 py-1 text-[10px] uppercase font-bold transition flex items-center space-x-1.5 shadow"
+            title="Open Live Preview in New Window"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span>Open in New Tab</span>
+          </a>
+        </div>
+      </div>
 
       {/* Tabs list bar */}
       <div className="flex items-center space-x-2 bg-[#111111] p-1 border border-[#222222] self-start text-[10px] font-bold uppercase tracking-widest w-fit">

@@ -18,6 +18,7 @@ import ProjectView from './pages/ProjectView';
 import BillingDashboard from './components/BillingDashboard';
 import Marketplace from './components/Marketplace';
 import AdminBillingDashboard from './components/AdminBillingDashboard';
+import StandalonePreview from './pages/StandalonePreview';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import {
   fetchFirestoreProjects,
@@ -546,6 +547,16 @@ function AppContent() {
               onAddCoupon={handleAddCoupon}
             />
           }
+        />
+
+        {/* Dedicated Live Sandbox Application Preview Route */}
+        <Route
+          path="/preview/:id"
+          element={<StandalonePreview projects={projects} />}
+        />
+        <Route
+          path="/sandbox/:id"
+          element={<StandalonePreview projects={projects} />}
         />
       </Routes>
     </div>

@@ -114,3 +114,18 @@ export interface TeamMember {
   role: 'owner' | 'admin' | 'developer' | 'viewer';
   joinedDate: string;
 }
+
+export interface EntityItem {
+  id: string;
+  title: string;
+  category: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface AppStats {
+  totalRecords: number;
+  activeUsers: number;
+  uptime: string;
+  latencyMs: number;
+}

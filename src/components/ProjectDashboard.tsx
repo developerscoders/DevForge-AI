@@ -284,6 +284,16 @@ export default function ProjectDashboard({
                         </button>
                       )}
 
+                      {/* Live Preview Direct Button */}
+                      <Link
+                        to={`/preview/${p.id}`}
+                        title="Open Live Preview"
+                        className="bg-[#050505] hover:bg-emerald-500 hover:text-black border border-[#222222] text-emerald-400 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1.5 transition-all duration-200 flex items-center space-x-1"
+                      >
+                        <Globe className="w-3 h-3" />
+                        <span>Preview</span>
+                      </Link>
+
                       {/* Workspace Link */}
                       <Link
                         to={`/projects/${p.id}`}
