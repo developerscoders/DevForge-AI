@@ -2381,6 +2381,23 @@ async function startServer() {
       });
       app.use(vite.middlewares);
 
+      // Dedicated SEO Endpoints
+      app.get('/robots.txt', (req, res) => {
+        const robotsPath = path.resolve(process.cwd(), 'public', 'robots.txt');
+        if (fs.existsSync(robotsPath)) {
+          return res.type('text/plain').sendFile(robotsPath);
+        }
+        res.type('text/plain').send('User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\n\nSitemap: https://devforge.ai/sitemap.xml');
+      });
+
+      app.get('/sitemap.xml', (req, res) => {
+        const sitemapPath = path.resolve(process.cwd(), 'public', 'sitemap.xml');
+        if (fs.existsSync(sitemapPath)) {
+          return res.type('application/xml').sendFile(sitemapPath);
+        }
+        res.status(404).send('Sitemap not found');
+      });
+
       // Development SPA fallback for client-side routing
       app.use('*', async (req, res, next) => {
         if (req.method !== 'GET' || req.originalUrl.startsWith('/api')) {

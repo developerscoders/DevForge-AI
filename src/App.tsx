@@ -19,6 +19,9 @@ import BillingDashboard from './components/BillingDashboard';
 import Marketplace from './components/Marketplace';
 import AdminBillingDashboard from './components/AdminBillingDashboard';
 import StandalonePreview from './pages/StandalonePreview';
+import FeaturesPage from './pages/FeaturesPage';
+import TemplatesPage from './pages/TemplatesPage';
+import DocsPage from './pages/DocsPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import {
   fetchFirestoreProjects,
@@ -477,6 +480,31 @@ function AppContent() {
       <Routes>
         {/* Project intake builder */}
         <Route path="/" element={<ProjectIntake onSubmit={handleForgeProject} />} />
+
+        {/* Features deep dive */}
+        <Route path="/features" element={<FeaturesPage />} />
+
+        {/* Autonomous starter blueprints */}
+        <Route path="/templates" element={<TemplatesPage />} />
+
+        {/* Developer documentation & FAQs */}
+        <Route path="/docs" element={<DocsPage />} />
+
+        {/* Pricing tier alias to billing */}
+        <Route
+          path="/pricing"
+          element={
+            <BillingDashboard
+              plans={plans}
+              activeSub={activeSub}
+              transactions={transactions}
+              onUpgrade={handleUpgradeSubscription}
+              coupons={coupons}
+              teamMembers={teamMembers}
+              onAddTeamMember={handleAddTeamMember}
+            />
+          }
+        />
 
         {/* List of projects dashboard */}
         <Route

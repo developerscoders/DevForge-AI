@@ -24,6 +24,8 @@ import {
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
+import SEOHead from './SEOHead';
+import { PAGE_SEO } from '../lib/seoConfig';
 
 interface AdminBillingDashboardProps {
   analytics: any;
@@ -254,6 +256,7 @@ export default function AdminBillingDashboard({
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-8 text-slate-100" id="admin-billing-view">
+      <SEOHead {...PAGE_SEO.admin} />
       
       {/* HEADER ROW */}
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-white/10 pb-6 gap-4">

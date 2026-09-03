@@ -20,7 +20,8 @@ import {
   MarketplaceProduct,
   WebhookEvent,
   TeamMember,
-  SubscriptionPlan
+  SubscriptionPlan,
+  BlueprintTemplate
 } from '../types';
 
 // Default initial plans
@@ -514,3 +515,119 @@ export const updateFirestoreUserSubscription = async (
     return null;
   }
 };
+
+// ==========================================
+// 8. Starter Blueprints & Templates in Firestore
+// ==========================================
+export const DEFAULT_TEMPLATES: BlueprintTemplate[] = [
+  {
+    id: 'saas-crm',
+    title: 'Modern B2B SaaS CRM Platform',
+    category: 'SaaS',
+    description: 'Complete multi-tenant customer relationship platform with pipeline stages, activity tracking, contact management, and revenue forecasting.',
+    tags: ['React', 'Tailwind', 'Pipeline', 'Multi-tenant'],
+    suggestedPrompt: 'Build a production-ready B2B SaaS CRM with contact directories, drag-and-drop lead kanban pipeline, deals tracking, activity timeline, and revenue forecast charts.',
+    difficulty: 'Enterprise',
+    estimatedFiles: 18,
+    author: 'DevForge Systems',
+    createdAt: '2026-09-01'
+  },
+  {
+    id: 'analytics-dashboard',
+    title: 'Real-Time Telemetry & Cloud Metrics',
+    category: 'Analytics',
+    description: 'High-throughput system monitoring dashboard with interactive time-series charts, latency histograms, error rate logs, and uptime indicators.',
+    tags: ['Recharts', 'Live Stream', 'Metrics', 'SRE'],
+    suggestedPrompt: 'Create a dark-mode real-time DevOps telemetry dashboard with server CPU/memory gauges, Recharts revenue line graphs, active error logs stream, and cluster node health status.',
+    difficulty: 'Intermediate',
+    estimatedFiles: 14,
+    author: 'SRE Core Team',
+    createdAt: '2026-09-01'
+  },
+  {
+    id: 'ai-knowledge-base',
+    title: 'AI Documentation & Knowledge Hub',
+    category: 'AI Tools',
+    description: 'Intelligent developer documentation hub with instant vector search, interactive code playgrounds, markdown renderer, and AI assistant query modal.',
+    tags: ['Markdown', 'AI Search', 'Docs', 'Dark UI'],
+    suggestedPrompt: 'Create a developer documentation portal with hierarchical sidebar navigation, instant search modal, code syntax highlighting, copyable snippets, and interactive API playground.',
+    difficulty: 'Intermediate',
+    estimatedFiles: 16,
+    author: 'DevForge AI Labs',
+    createdAt: '2026-09-02'
+  },
+  {
+    id: 'digital-marketplace',
+    title: 'Digital Goods & Plugin Marketplace',
+    category: 'E-Commerce',
+    description: 'E-commerce platform for developer plugins, digital assets, and AI prompts with checkout flow, rating breakdowns, and creator dashboards.',
+    tags: ['E-Commerce', 'Razorpay', 'Digital Assets', 'Creator'],
+    suggestedPrompt: 'Build a creator marketplace for digital developer plugins with categorized browsing, search & tag filters, rating reviews, cart checkout, and digital download receipt simulator.',
+    difficulty: 'Enterprise',
+    estimatedFiles: 20,
+    author: 'Marketplace Guild',
+    createdAt: '2026-09-02'
+  },
+  {
+    id: 'kanban-workflow',
+    title: 'Agile Sprint & Team Task Board',
+    category: 'Developer Tools',
+    description: 'Collaborative task management board featuring backlog, active sprints, story point estimators, priority tags, and assignee filtering.',
+    tags: ['Workflow', 'Drag & Drop', 'Productivity', 'Agile'],
+    suggestedPrompt: 'Build an agile project sprint management board with customizable status columns, story point poker estimation, team assignee filters, and markdown task descriptions.',
+    difficulty: 'Beginner',
+    estimatedFiles: 12,
+    author: 'Agile Ops',
+    createdAt: '2026-09-03'
+  },
+  {
+    id: 'ai-conversational-studio',
+    title: 'Multi-Persona AI Chat Studio',
+    category: 'AI Tools',
+    description: 'Advanced conversational workspace supporting multiple system personas, parameter tuning (temperature, top-p), streaming response rendering, and prompt history.',
+    tags: ['AI Chat', 'Gemini API', 'Streaming', 'Personas'],
+    suggestedPrompt: 'Create a multi-persona AI conversational studio with custom system prompts, temperature sliders, streaming message bubble animations, and export chat to JSON/Markdown.',
+    difficulty: 'Intermediate',
+    estimatedFiles: 15,
+    author: 'Cognitive Engine',
+    createdAt: '2026-09-03'
+  }
+];
+
+export const fetchFirestoreTemplates = async (): Promise<BlueprintTemplate[]> => {
+  try {
+    const coll = collection(db, 'templates');
+    const snap = await getDocs(coll);
+    const list: BlueprintTemplate[] = [];
+    snap.forEach((d) => {
+      list.push({ id: d.id, ...d.data() } as BlueprintTemplate);
+    });
+
+    if (list.length > 0) {
+      return list;
+    }
+
+    // Seed defaults to Firestore if collection is empty and user is logged in
+    if (auth.currentUser) {
+      for (const t of DEFAULT_TEMPLATES) {
+        await setDoc(doc(db, 'templates', t.id), t);
+      }
+    }
+    return DEFAULT_TEMPLATES;
+  } catch (e) {
+    console.warn('Error fetching templates from Firestore, using defaults:', e);
+    return DEFAULT_TEMPLATES;
+  }
+};
+
+export const saveFirestoreTemplate = async (template: BlueprintTemplate) => {
+  try {
+    const docRef = doc(db, 'templates', template.id);
+    await setDoc(docRef, template, { merge: true });
+    return true;
+  } catch (e) {
+    console.warn('Error saving template to Firestore:', e);
+    return false;
+  }
+};
+

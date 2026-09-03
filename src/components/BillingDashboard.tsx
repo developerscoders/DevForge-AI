@@ -27,6 +27,8 @@ import {
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from './AuthModal';
+import SEOHead from './SEOHead';
+import { PAGE_SEO } from '../lib/seoConfig';
 import { SubscriptionPlan, Transaction, Coupon, TeamMember } from '../types';
 
 interface BillingDashboardProps {
@@ -468,6 +470,7 @@ export default function BillingDashboard({
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-10 text-slate-100" id="billing-dashboard-view">
+      <SEOHead {...PAGE_SEO.billing} />
       
       {/* GUEST BANNER WHEN NOT LOGGED IN */}
       {!user && (

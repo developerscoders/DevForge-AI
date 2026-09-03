@@ -31,6 +31,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from './AuthModal';
+import SEOHead from './SEOHead';
+import { PAGE_SEO } from '../lib/seoConfig';
 
 interface MarketplaceProps {
   products: MarketplaceProduct[];
@@ -366,6 +368,7 @@ export default function Marketplace({
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-10 text-slate-100" id="marketplace-view">
+      <SEOHead {...PAGE_SEO.marketplace} />
       
       {/* GUEST BANNER WHEN NOT LOGGED IN */}
       {!user && (

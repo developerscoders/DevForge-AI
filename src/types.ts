@@ -154,3 +154,17 @@ export interface DeploymentResult {
   filesCount?: number;
 }
 
+export interface BlueprintTemplate {
+  id: string;
+  title: string;
+  category: 'SaaS' | 'Analytics' | 'E-Commerce' | 'AI Tools' | 'Developer Tools';
+  description: string;
+  tags: string[];
+  suggestedPrompt: string;
+  difficulty: 'Beginner' | 'Intermediate' | 'Enterprise';
+  estimatedFiles: number;
+  author?: string;
+  createdAt?: string;
+}
+
+

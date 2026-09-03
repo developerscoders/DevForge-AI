@@ -130,6 +130,24 @@
         "purchasedAt": { "type": "string" }
       },
       "required": ["id", "userId", "productId"]
+    },
+    "BlueprintTemplate": {
+      "title": "BlueprintTemplate",
+      "description": "Production starter blueprints and architecture templates",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string" },
+        "description": { "type": "string", "maxLength": 2000 },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "suggestedPrompt": { "type": "string", "maxLength": 4000 },
+        "difficulty": { "type": "string", "enum": ["Beginner", "Intermediate", "Enterprise"] },
+        "estimatedFiles": { "type": "number" },
+        "author": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "category", "description", "suggestedPrompt"]
     }
   },
   "firestore": {
@@ -164,6 +182,10 @@
     "/marketplace_purchases/{purchaseId}": {
       "schema": "MarketplacePurchase",
       "description": "User marketplace item acquisition records"
+    },
+    "/templates/{templateId}": {
+      "schema": "BlueprintTemplate",
+      "description": "Production starter blueprints stored in Firestore"
     }
   }
 }

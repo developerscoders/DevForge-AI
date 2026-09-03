@@ -1,6 +1,20 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Terminal, CreditCard, LayoutDashboard, ShoppingBag, ShieldAlert, Sparkles, User, LogOut, LogIn, ShieldCheck } from 'lucide-react';
+import {
+  Terminal,
+  CreditCard,
+  LayoutDashboard,
+  ShoppingBag,
+  ShieldAlert,
+  Sparkles,
+  User,
+  LogOut,
+  LogIn,
+  ShieldCheck,
+  Cpu,
+  Layers,
+  BookOpen
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from './AuthModal';
 
@@ -18,10 +32,13 @@ export default function Navbar({ creditsRemaining, creditsTotal, planName }: Nav
 
   const navItems = [
     { path: '/', label: 'Builder', icon: Sparkles },
-    { path: '/projects', label: 'Projects', icon: LayoutDashboard },
-    { path: '/billing', label: 'Billing & SRE Plans', icon: CreditCard },
+    { path: '/features', label: 'Features', icon: Cpu },
+    { path: '/templates', label: 'Templates', icon: Layers },
     { path: '/marketplace', label: 'Marketplace', icon: ShoppingBag },
-    { path: '/admin', label: 'SRE Admin Panel', icon: ShieldAlert },
+    { path: '/docs', label: 'Docs', icon: BookOpen },
+    { path: '/pricing', label: 'Pricing', icon: CreditCard },
+    { path: '/projects', label: 'Projects', icon: LayoutDashboard },
+    { path: '/admin', label: 'SRE Admin', icon: ShieldAlert },
   ];
 
   const actualCredits = profile ? profile.creditsRemaining : creditsRemaining;

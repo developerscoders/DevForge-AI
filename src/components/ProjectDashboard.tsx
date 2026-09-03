@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Project } from '../types';
+import SEOHead from './SEOHead';
+import { PAGE_SEO } from '../lib/seoConfig';
 import {
   Layout,
   Calendar,
@@ -74,6 +76,7 @@ export default function ProjectDashboard({
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-8 text-slate-100" id="project-dashboard">
+      <SEOHead {...PAGE_SEO.projects} />
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-white/10 pb-6">
         <div>

@@ -1,19 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Sparkles, Mic, MicOff, BrainCircuit, ArrowRight, Zap, Coins, Clock, HelpCircle, HardDrive, Lock, ShieldCheck } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from './AuthModal';
+import SEOHead from './SEOHead';
+import { PAGE_SEO } from '../lib/seoConfig';
 
 interface ProjectIntakeProps {
   onSubmit: (prompt: string, modelConfig: Record<string, string>) => void;
 }
 
 export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
+  const location = useLocation();
   const { user, profile } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
+
+  // Check for prefilled prompt from template gallery
+  useEffect(() => {
+    if (location.state && (location.state as any).prefilledPrompt) {
+      setPrompt((location.state as any).prefilledPrompt);
+    }
+  }, [location.state]);
 
   // Model Routing options matching requested multi-provider architecture
   const [modelConfig, setModelConfig] = useState<Record<string, string>>({
@@ -220,6 +231,7 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 grid lg:grid-cols-12 gap-8 text-slate-100" id="project-intake">
+      <SEOHead {...PAGE_SEO.home} />
       
       {/* LEFT PANEL: Prompt Area and Presets */}
       <div className="lg:col-span-7 space-y-8">

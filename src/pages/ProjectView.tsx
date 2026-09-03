@@ -36,6 +36,7 @@ import LiveSandboxPreview from '../components/LiveSandboxPreview';
 import ExportProjectModal from '../components/ExportProjectModal';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from '../components/AuthModal';
+import SEOHead from '../components/SEOHead';
 import {
   fetchFirestoreProjectById,
   saveFirestoreProject,
@@ -322,6 +323,12 @@ export default function ProjectView({
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-6 text-slate-100" id="project-workspace">
+      <SEOHead
+        title={`${project.name} | DevForge AI IDE & Workspace`}
+        description={project.description || `${project.name} - Full-stack software engineering project generated autonomously by DevForge AI.`}
+        canonical={`https://devforge.ai/projects/${project.id}`}
+        keywords={['DevForge workspace', project.name, 'autonomous coding', 'React Vite', 'AI software engineering', 'TypeScript']}
+      />
       {/* Back & Breadcrumb header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-[#222222] pb-5 gap-4">
         <div className="flex items-center space-x-4">
