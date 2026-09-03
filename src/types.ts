@@ -53,6 +53,8 @@ export interface Project {
   aiCreditsUsed: number;
   modelConfig: Record<string, string>; // Role -> Model mapping
   deployedUrl?: string;
+  githubRepoUrl?: string;
+  vercelDeployUrl?: string;
 }
 
 export interface SubscriptionPlan {
@@ -129,3 +131,26 @@ export interface AppStats {
   uptime: string;
   latencyMs: number;
 }
+
+export interface AdminAnalytics {
+  monthlyRecurringRevenue: number;
+  annualRunRate: number;
+  totalRevenue: number;
+  activeSubscriptions: number;
+  activeSreContainers: number;
+  globalCreditUsage: number;
+  refundsCount: number;
+  revenueHistory?: Array<{ month: string; Revenue: number }>;
+}
+
+export interface DeploymentResult {
+  success: boolean;
+  provider: 'github' | 'vercel';
+  url?: string;
+  repoName?: string;
+  deploymentId?: string;
+  readyState?: string;
+  error?: string;
+  filesCount?: number;
+}
+

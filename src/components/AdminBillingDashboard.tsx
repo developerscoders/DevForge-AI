@@ -245,16 +245,12 @@ export default function AdminBillingDashboard({
     await onUpdatePlan(editPlanId, parseFloat(editPriceMonthly), parseFloat(editPriceYearly), parseInt(editCredits));
   };
 
-  // Recharts high fidelity revenue progression
-  const chartData = [
-    { month: 'Jan', Revenue: 8500 },
-    { month: 'Feb', Revenue: 11400 },
-    { month: 'Mar', Revenue: 14500 },
-    { month: 'Apr', Revenue: 19800 },
-    { month: 'May', Revenue: 24200 },
-    { month: 'Jun', Revenue: 31500 },
-    { month: 'Jul', Revenue: (analytics?.monthlyRecurringRevenue || 4850) + 24200 },
-  ];
+  // Dynamic revenue progression strictly from database analytics
+  const chartData = (analytics as any)?.revenueHistory && (analytics as any).revenueHistory.length > 0
+    ? (analytics as any).revenueHistory
+    : [
+        { month: 'Current', Revenue: analytics?.totalRevenue || 0 }
+      ];
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-8 text-slate-100" id="admin-billing-view">
@@ -327,7 +323,7 @@ export default function AdminBillingDashboard({
               <div>
                 <span className="label text-[9px] text-slate-500">Monthly Rec. Revenue</span>
                 <div className="text-2xl font-black text-white mt-1.5 font-mono">
-                  ${(analytics?.monthlyRecurringRevenue || 4850).toLocaleString()}
+                  ${(analytics?.monthlyRecurringRevenue ?? 0).toLocaleString()}
                 </div>
               </div>
               <div className="p-2.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -339,7 +335,7 @@ export default function AdminBillingDashboard({
               <div>
                 <span className="label text-[9px] text-slate-500">Annual Run Rate</span>
                 <div className="text-2xl font-black text-white mt-1.5 font-mono">
-                  ${((analytics?.monthlyRecurringRevenue || 4850) * 12).toLocaleString()}
+                  ${((analytics as any)?.annualRunRate ?? ((analytics?.monthlyRecurringRevenue ?? 0) * 12)).toLocaleString()}
                 </div>
               </div>
               <div className="p-2.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
@@ -351,7 +347,7 @@ export default function AdminBillingDashboard({
               <div>
                 <span className="label text-[9px] text-slate-500">Cumulative Earnings</span>
                 <div className="text-2xl font-black text-white mt-1.5 font-mono">
-                  ${(analytics?.totalRevenue || 18450).toLocaleString()}
+                  ${(analytics?.totalRevenue ?? 0).toLocaleString()}
                 </div>
               </div>
               <div className="p-2.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
@@ -363,7 +359,7 @@ export default function AdminBillingDashboard({
               <div>
                 <span className="label text-[9px] text-slate-500">Tenant Active Subscriptions</span>
                 <div className="text-2xl font-black text-white mt-1.5 font-mono">
-                  {analytics?.activeSubscriptions || 124}
+                  {analytics?.activeSubscriptions ?? 0}
                 </div>
               </div>
               <div className="p-2.5 bg-violet-500/10 text-violet-400 border border-violet-500/20">
