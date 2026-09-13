@@ -32,6 +32,10 @@ export interface Agent {
   ceoDirectives?: string[];
   validationStatus?: 'pending' | 'in_review' | 'validated' | 'rejection_healing';
   healingNotes?: string;
+  assignedPrompt?: string;
+  modelUsed?: string;
+  generatedArtifact?: string;
+  executionLatencyMs?: number;
 }
 
 export interface ModelRoutingOption {
@@ -41,12 +45,44 @@ export interface ModelRoutingOption {
   costPer1kTokens: number; // in cents
 }
 
+export interface TestQualityAudit {
+  lineCoverage: number;
+  branchCoverage: number;
+  untestedCriticalPaths: string[];
+  testTheaterFindings: string[];
+  verdict: 'pass' | 'failed_coverage_floor' | 'failed_critical_path' | 'failed_test_quality';
+  functionCoverage?: number;
+  rawTestContent?: string;
+  untestedFiles?: string[];
+  auditedAt?: string;
+}
+
+export interface AstAuditResult {
+  passed: boolean;
+  astValid: boolean;
+  errors: string[];
+  securityAlerts: number;
+  port3000Configured: boolean;
+  brokenReferences?: string[];
+  auditedAt?: string;
+}
+
+export interface DeploymentCertificate {
+  certifiedAt: string;
+  certificateHash: string;
+  certifiedBy: string; // 'Aria, DevForge CEO Executive Orchestrator'
+  verdict: 'VERIFIED_AND_CERTIFIED' | 'BLOCKED';
+  reason?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
   description: string;
   prompt: string;
-  status: 'planning' | 'designing' | 'coding' | 'testing' | 'deployed' | 'idle';
+  status: 'planning' | 'designing' | 'coding' | 'testing' | 'deployed' | 'idle' | 'building' | 'failed';
+  deploymentStatus?: 'idle' | 'queued' | 'building' | 'deployed' | 'failed';
+  deploymentError?: string;
   files: FileNode[];
   agents: Agent[];
   createdAt: string;
@@ -55,6 +91,11 @@ export interface Project {
   deployedUrl?: string;
   githubRepoUrl?: string;
   vercelDeployUrl?: string;
+  vercelDeploymentId?: string;
+  testQualityAudit?: TestQualityAudit;
+  astAudit?: AstAuditResult;
+  deploymentCertificate?: DeploymentCertificate;
+  selfHealingAttempts?: Record<number, number>;
 }
 
 export interface SubscriptionPlan {
@@ -165,6 +206,27 @@ export interface BlueprintTemplate {
   estimatedFiles: number;
   author?: string;
   createdAt?: string;
+}
+
+export interface CMSPageSEO {
+  metaTitle: string;
+  metaDescription: string;
+  metaKeywords: string[] | string;
+  canonicalUrl?: string;
+  ogImage?: string;
+  ogType?: 'website' | 'article' | 'product';
+  noIndex?: boolean;
+  structuredData?: Record<string, any> | Array<Record<string, any>>;
+}
+
+export interface CMSPage {
+  id: string;
+  slug: string;
+  name: string;
+  seo: CMSPageSEO;
+  contentSummary?: string;
+  status: 'published' | 'draft';
+  lastUpdated?: string;
 }
 
 

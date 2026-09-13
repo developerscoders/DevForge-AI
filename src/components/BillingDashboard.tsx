@@ -470,7 +470,7 @@ export default function BillingDashboard({
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-10 text-slate-100" id="billing-dashboard-view">
-      <SEOHead {...PAGE_SEO.billing} />
+      <SEOHead pageSlug="/pricing" pageId="pricing" {...PAGE_SEO.billing} />
       
       {/* GUEST BANNER WHEN NOT LOGGED IN */}
       {!user && (

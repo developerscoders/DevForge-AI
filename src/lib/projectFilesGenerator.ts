@@ -1,4 +1,6 @@
 import { FileNode } from '../types.js';
+import { generateCalculatorProjectFiles } from './calculatorProjectFiles.js';
+import { generateCoffeeShopProjectFiles } from './coffeeShopProjectFiles.js';
 
 /**
  * Generates a complete, production-ready, fully fledged multi-file repository
@@ -8,6 +10,32 @@ export function generateFullProjectFiles(appName: string, prompt: string, cleanA
   const safeName = (cleanAppName || appName.toLowerCase().replace(/[^a-z0-9]/g, '-')).replace(/^-+|-+$/g, '') || 'web-app';
   const cleanTitle = appName || 'Autonomous Application';
   const dateStr = new Date().toISOString().split('T')[0];
+
+  const promptLower = (prompt + ' ' + appName).toLowerCase();
+  const isCalculator =
+    promptLower.includes('calc') ||
+    promptLower.includes('math') ||
+    promptLower.includes('arithmetic');
+
+  if (isCalculator) {
+    return generateCalculatorProjectFiles(appName, prompt, safeName);
+  }
+
+  const isCoffeeShop =
+    promptLower.includes('coffee') ||
+    promptLower.includes('cafe') ||
+    promptLower.includes('café') ||
+    promptLower.includes('barista') ||
+    promptLower.includes('latte') ||
+    promptLower.includes('espresso') ||
+    promptLower.includes('roast') ||
+    promptLower.includes('bakery') ||
+    promptLower.includes('tea') ||
+    promptLower.includes('beverage');
+
+  if (isCoffeeShop) {
+    return generateCoffeeShopProjectFiles(appName, prompt, safeName);
+  }
 
   return [
     // 1. package.json
@@ -30,11 +58,12 @@ export function generateFullProjectFiles(appName: string, prompt: string, cleanA
           dependencies: {
             react: '^19.0.0',
             'react-dom': '^19.0.0',
-            'lucide-react': '^0.450.0'
+            'lucide-react': '^0.460.0'
           },
           devDependencies: {
             vite: '^6.2.0',
             '@vitejs/plugin-react': '^4.3.0',
+            '@tailwindcss/vite': '^4.0.0',
             tailwindcss: '^4.0.0',
             typescript: '^5.7.0',
             '@types/react': '^19.0.0',
@@ -84,15 +113,37 @@ export function generateFullProjectFiles(appName: string, prompt: string, cleanA
       type: 'file',
       content: `import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     port: 3000,
     host: '0.0.0.0'
   }
 });
 `
+    },
+
+    // 3b. vercel.json
+    {
+      path: 'vercel.json',
+      name: 'vercel.json',
+      type: 'file',
+      content: JSON.stringify(
+        {
+          $schema: 'https://openapi.vercel.sh/vercel.json',
+          framework: 'vite',
+          buildCommand: 'vite build',
+          outputDirectory: 'dist',
+          cleanUrls: true,
+          rewrites: [
+            { source: '/(.*)', destination: '/index.html' }
+          ]
+        },
+        null,
+        2
+      )
     },
 
     // 4. index.html
@@ -108,6 +159,8 @@ export default defineConfig({
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${cleanTitle}</title>
     <meta name="description" content="${prompt.slice(0, 160)}" />
+    <!-- Instant Tailwind CSS Engine via CDN: Guarantees 100% full styling on Vercel, Netlify, and static edge -->
+    <script src="https://cdn.tailwindcss.com"></script>
   </head>
   <body class="bg-[#09090b] text-slate-100 antialiased selection:bg-violet-500 selection:text-white">
     <div id="root"></div>

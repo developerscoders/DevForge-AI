@@ -123,7 +123,8 @@ export async function pushProjectToGitHub(options: {
 
     // 4. Push files using the GitHub Contents API
     let pushedCount = 0;
-    const filesToPush = files.filter((f) => f.type !== 'folder' && f.content);
+    const enrichedFiles = ensureProductionDeployFiles(files, appName);
+    const filesToPush = enrichedFiles.filter((f) => f.type !== 'folder' && f.content);
 
     for (const file of filesToPush) {
       const cleanPath = file.path.replace(/^\/+/, '');
@@ -217,6 +218,79 @@ export async function validateVercelToken(token: string): Promise<{ valid: boole
 }
 
 /**
+ * Validates and self-heals project files for production deployment on Vercel & GitHub.
+ * Guarantees Tailwind CSS engine injection (via CDN and @tailwindcss/vite) and vercel.json configuration.
+ */
+export function ensureProductionDeployFiles(files: FileNode[], appName?: string): FileNode[] {
+  const result = files.map((f) => ({ ...f }));
+
+  // 1. Ensure index.html includes Tailwind CSS CDN for 100% fail-safe styling in all edge environments
+  const indexHtml = result.find((f) => f.path === 'index.html' || f.path === '/index.html');
+  if (indexHtml && indexHtml.content) {
+    if (!indexHtml.content.includes('cdn.tailwindcss.com')) {
+      if (indexHtml.content.includes('</head>')) {
+        indexHtml.content = indexHtml.content.replace(
+          '</head>',
+          '  <!-- Instant Tailwind CSS Engine via CDN: Guarantees 100% full styling on Vercel, Netlify, and static edge -->\n    <script src="https://cdn.tailwindcss.com"></script>\n  </head>'
+        );
+      } else {
+        indexHtml.content = `<script src="https://cdn.tailwindcss.com"></script>\n` + indexHtml.content;
+      }
+    }
+  }
+
+  // 2. Ensure package.json includes @tailwindcss/vite and tailwindcss
+  const packageJson = result.find((f) => f.path === 'package.json' || f.path === '/package.json');
+  if (packageJson && packageJson.content) {
+    try {
+      const parsed = JSON.parse(packageJson.content);
+      parsed.devDependencies = parsed.devDependencies || {};
+      if (!parsed.devDependencies['@tailwindcss/vite']) {
+        parsed.devDependencies['@tailwindcss/vite'] = '^4.0.0';
+      }
+      if (!parsed.devDependencies['tailwindcss']) {
+        parsed.devDependencies['tailwindcss'] = '^4.0.0';
+      }
+      packageJson.content = JSON.stringify(parsed, null, 2);
+    } catch (e) {
+      console.warn('Could not parse package.json for deploy enrichment:', e);
+    }
+  }
+
+  // 3. Ensure vite.config.ts has tailwindcss plugin
+  const viteConfig = result.find((f) => f.path === 'vite.config.ts' || f.path === '/vite.config.ts');
+  if (viteConfig && viteConfig.content) {
+    if (!viteConfig.content.includes('@tailwindcss/vite')) {
+      viteConfig.content = `import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nimport tailwindcss from '@tailwindcss/vite';\n\nexport default defineConfig({\n  plugins: [react(), tailwindcss()],\n  server: {\n    port: 3000,\n    host: '0.0.0.0'\n  }\n});\n`;
+    }
+  }
+
+  // 4. Ensure vercel.json is present
+  const hasVercelJson = result.some((f) => f.path === 'vercel.json' || f.path === '/vercel.json');
+  if (!hasVercelJson) {
+    result.push({
+      path: 'vercel.json',
+      name: 'vercel.json',
+      type: 'file',
+      content: JSON.stringify(
+        {
+          $schema: 'https://openapi.vercel.sh/vercel.json',
+          framework: 'vite',
+          buildCommand: 'vite build',
+          outputDirectory: 'dist',
+          cleanUrls: true,
+          rewrites: [{ source: '/(.*)', destination: '/index.html' }]
+        },
+        null,
+        2
+      )
+    });
+  }
+
+  return result;
+}
+
+/**
  * Deploys project files directly to Vercel via Vercel Deployments API
  */
 export async function deployProjectToVercel(options: {
@@ -241,8 +315,9 @@ export async function deployProjectToVercel(options: {
     return { success: false, error: authCheck.error || 'Vercel authentication failed' };
   }
 
-  // 3. Format files according to Vercel API specification
-  const validFiles = files.filter((f) => f.type !== 'folder' && f.content !== undefined);
+  // 3. Format and enrich files with guaranteed CSS & build configs according to Vercel API specification
+  const enrichedFiles = ensureProductionDeployFiles(files, appName);
+  const validFiles = enrichedFiles.filter((f) => f.type !== 'folder' && f.content !== undefined);
   if (validFiles.length === 0) {
     return { success: false, error: 'Project has no files to deploy' };
   }
@@ -310,9 +385,16 @@ export async function checkVercelDeploymentStatus(token: string, deploymentId: s
     }
 
     const data = await res.json();
+    const readyState = data.readyState || 'READY';
+    const errorMsg =
+      data.error?.message ||
+      data.errorMessage ||
+      (readyState === 'ERROR' ? 'Vercel build or dependency installation failed.' : undefined);
+
     return {
-      readyState: data.readyState || 'READY',
-      url: data.url ? `https://${data.url}` : undefined
+      readyState,
+      url: data.url ? `https://${data.url}` : undefined,
+      error: errorMsg
     };
   } catch (err: any) {
     return { readyState: 'ERROR', error: err.message };

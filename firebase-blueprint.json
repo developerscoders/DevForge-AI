@@ -148,6 +148,33 @@
         "createdAt": { "type": "string" }
       },
       "required": ["id", "title", "category", "description", "suggestedPrompt"]
+    },
+    "CMSPage": {
+      "title": "CMSPage",
+      "description": "Content Management System page with SEO metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "slug": { "type": "string" },
+        "name": { "type": "string" },
+        "contentSummary": { "type": "string" },
+        "status": { "type": "string", "enum": ["published", "draft"] },
+        "lastUpdated": { "type": "string" },
+        "seo": {
+          "type": "object",
+          "properties": {
+            "metaTitle": { "type": "string" },
+            "metaDescription": { "type": "string" },
+            "metaKeywords": { "type": "string" },
+            "canonicalUrl": { "type": "string" },
+            "ogImage": { "type": "string" },
+            "ogType": { "type": "string" },
+            "noIndex": { "type": "boolean" }
+          },
+          "required": ["metaTitle", "metaDescription", "metaKeywords"]
+        }
+      },
+      "required": ["id", "slug", "name", "seo"]
     }
   },
   "firestore": {
@@ -186,6 +213,10 @@
     "/templates/{templateId}": {
       "schema": "BlueprintTemplate",
       "description": "Production starter blueprints stored in Firestore"
+    },
+    "/cms_pages/{pageId}": {
+      "schema": "CMSPage",
+      "description": "CMS pages with editable SEO metadata and indexed slugs"
     }
   }
 }

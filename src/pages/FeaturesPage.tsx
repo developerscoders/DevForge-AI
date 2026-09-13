@@ -71,7 +71,7 @@ export default function FeaturesPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-12 space-y-16 text-slate-100" id="features-page">
-      <SEOHead {...PAGE_SEO.features} />
+      <SEOHead pageSlug="/features" pageId="features" {...PAGE_SEO.features} />
 
       {/* Header Banner */}
       <div className="text-center max-w-3xl mx-auto space-y-4">

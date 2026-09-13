@@ -18,6 +18,70 @@ export interface LLMResponse {
   isSimulated: boolean;
 }
 
+// Helper to map legacy, paid, or generic models to verified FREE and LATEST OpenRouter endpoints (:free)
+function getOpenRouterCandidateModels(requestedModel?: string): string[] {
+  const req = requestedModel?.trim() || '';
+
+  // Active verified free models on OpenRouter (2025/2026):
+  // - meta-llama/llama-3.3-70b-instruct:free (Latest high-power Llama 3.3 70B)
+  // - deepseek/deepseek-r1:free (Latest reasoning R1 model)
+  // - deepseek/deepseek-chat:free (Latest DeepSeek V3 chat)
+  // - qwen/qwen-2.5-coder-32b-instruct:free (State-of-the-art free coding model)
+  // - openrouter/free (Official OpenRouter free models auto-router)
+  const freeModels = [
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'deepseek/deepseek-r1:free',
+    'deepseek/deepseek-chat:free',
+    'qwen/qwen-2.5-coder-32b-instruct:free',
+    'openrouter/free'
+  ];
+
+  if (!req || req === 'openrouter/free' || req === 'auto') {
+    return ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'];
+  }
+
+  // If already explicitly specifies :free
+  if (req.includes(':free')) {
+    return Array.from(new Set([req, 'meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'])).slice(0, 3);
+  }
+
+  // Map requested models to their latest free counterparts
+  const freeMapping: Record<string, string[]> = {
+    // PM / General / OpenAI mappings -> LLaMA 3.3 70B Free & DeepSeek V3 Chat Free
+    'openai/gpt-4o-mini': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
+    'openai/gpt-4o': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
+    'gpt-4o-mini': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
+    'anthropic/claude-3-haiku': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
+    'anthropic/claude-3.5-sonnet': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-r1:free', 'openrouter/free'],
+    'anthropic/claude-3-5-sonnet': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-r1:free', 'openrouter/free'],
+    'claude-3.5-sonnet': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-r1:free', 'openrouter/free'],
+    
+    // Architecture / Reasoning mappings -> DeepSeek R1 Free & DeepSeek V3 Chat Free
+    'deepseek/deepseek-r1': ['deepseek/deepseek-r1:free', 'deepseek/deepseek-chat:free', 'qwen/qwen-2.5-coder-32b-instruct:free'],
+    'deepseek-r1': ['deepseek/deepseek-r1:free', 'deepseek/deepseek-chat:free', 'qwen/qwen-2.5-coder-32b-instruct:free'],
+    'deepseek/deepseek-chat': ['deepseek/deepseek-chat:free', 'deepseek/deepseek-r1:free', 'meta-llama/llama-3.3-70b-instruct:free'],
+    'deepseek-chat': ['deepseek/deepseek-chat:free', 'meta-llama/llama-3.3-70b-instruct:free', 'openrouter/free'],
+
+    // Coding / SRE mappings -> Qwen 2.5 Coder 32B Free & LLaMA 3.3 70B Free
+    'qwen/qwen-2.5-coder-32b-instruct': ['qwen/qwen-2.5-coder-32b-instruct:free', 'meta-llama/llama-3.3-70b-instruct:free', 'openrouter/free'],
+    'meta-llama/llama-3.3-70b-instruct': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free']
+  };
+
+  if (freeMapping[req]) {
+    return freeMapping[req];
+  }
+
+  // Default fallback: Try requested model with :free, then verified free fallbacks
+  const candidates = [
+    `${req}:free`,
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'deepseek/deepseek-r1:free',
+    'openrouter/free'
+  ];
+
+  return Array.from(new Set(candidates)).slice(0, 3);
+}
+
 // Lazy Gemini Client
 let geminiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
@@ -67,13 +131,15 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     }
   }
 
-  // 2. OpenRouter Provider (Claude 3.5 Sonnet, GPT-4o-mini, DeepSeek)
+  // 2. OpenRouter Provider (Latest Free Models: LLaMA 3.3 70B, DeepSeek R1/Chat, Qwen 2.5 Coder)
   if (provider === 'openrouter') {
     const key = process.env.OPENROUTER_API_KEY;
     if (key && key.trim() !== '') {
       try {
+        const candidateModels = getOpenRouterCandidateModels(model);
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
+          signal: AbortSignal.timeout(30000), // Extended 30s timeout for free queue & cold starts
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${key}`,
@@ -81,12 +147,14 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
             'X-Title': 'DevForge AI Swarm',
           },
           body: JSON.stringify({
-            model: model || 'anthropic/claude-3.5-sonnet',
+            model: candidateModels[0],
+            models: candidateModels,
             messages: [
               ...(systemInstruction ? [{ role: 'system', content: systemInstruction }] : []),
               { role: 'user', content: prompt }
             ],
             temperature,
+            max_tokens: options.maxTokens || 2048,
           }),
         });
 
@@ -95,17 +163,22 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
           const text = data.choices?.[0]?.message?.content || '';
           return {
             text,
-            provider: 'OpenRouter',
-            model: model || 'anthropic/claude-3.5-sonnet',
+            provider: 'OpenRouter Free Tier',
+            model: data.model || candidateModels[0],
             tokensUsed: data.usage?.total_tokens,
             latencyMs: Date.now() - startTime,
             isSimulated: false,
           };
         } else {
-          console.warn(`[OpenRouter HTTP Error]: status ${res.status}`);
+          const errBody = await res.text();
+          console.warn(`[OpenRouter HTTP Status ${res.status}]: ${errBody.slice(0, 160)}. Routing to secondary fallback.`);
         }
       } catch (err: any) {
-        console.warn(`[OpenRouter Warning]: ${err.message}`);
+        if (err.name === 'TimeoutError' || err.message?.includes('timeout') || err.message?.includes('aborted')) {
+          console.warn(`[OpenRouter Timeout]: OpenRouter free model took >30s or connection stalled. Routing to resilient fallback engine.`);
+        } else {
+          console.warn(`[OpenRouter Notice]: ${err.message}. Routing to fallback.`);
+        }
       }
     }
   }
@@ -117,6 +190,7 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
       try {
         const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
           method: 'POST',
+          signal: AbortSignal.timeout(12000),
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${key}`,
@@ -158,6 +232,7 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
+          signal: AbortSignal.timeout(12000),
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${key}`,
@@ -247,10 +322,16 @@ export function getProviderConfigStatus() {
     },
     openrouter: {
       configured: openrouterConfigured,
-      name: 'OpenRouter AI',
-      models: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o-mini', 'deepseek/deepseek-r1'],
+      name: 'OpenRouter (Free Tier)',
+      models: [
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'deepseek/deepseek-r1:free',
+        'deepseek/deepseek-chat:free',
+        'qwen/qwen-2.5-coder-32b-instruct:free',
+        'openrouter/free'
+      ],
       role: 'Strategic PRD & Architecture Contracts',
-      latencyEstimate: openrouterConfigured ? '340ms' : 'Fallback to Gemini',
+      latencyEstimate: openrouterConfigured ? '350ms' : 'Fallback to Gemini',
     },
     nvidia: {
       configured: nvidiaConfigured,

@@ -20,12 +20,25 @@ import {
   AlertTriangle,
   Key,
   Layers,
-  ArrowUpRight
+  ArrowUpRight,
+  Globe,
+  Search,
+  FileText,
+  Edit3,
+  ExternalLink,
+  Sparkles
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import SEOHead from './SEOHead';
-import { PAGE_SEO } from '../lib/seoConfig';
+import { PAGE_SEO, SITE_CONFIG } from '../lib/seoConfig';
+import { CMSPage, CMSPageSEO } from '../types';
+import {
+  fetchCMSPages,
+  updateCMSPageSEO,
+  subscribeToAllCMSPages,
+  DEFAULT_CMS_PAGES
+} from '../lib/cmsService';
 
 interface AdminBillingDashboardProps {
   analytics: any;
@@ -67,7 +80,73 @@ export default function AdminBillingDashboard({
   onAddCoupon,
 }: AdminBillingDashboardProps) {
   const { profile, user, updateUserSubscription } = useAuth();
-  const [activeTab, setActiveTab] = useState<'analytics' | 'tenants' | 'providers' | 'coupons' | 'webhooks' | 'plans'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'tenants' | 'providers' | 'coupons' | 'webhooks' | 'plans' | 'cms'>('analytics');
+
+  // CMS & SEO Management
+  const [cmsPagesList, setCmsPagesList] = useState<CMSPage[]>(DEFAULT_CMS_PAGES);
+  const [selectedCMSPageId, setSelectedCMSPageId] = useState<string>('home');
+  const [editMetaTitle, setEditMetaTitle] = useState<string>('');
+  const [editMetaDesc, setEditMetaDesc] = useState<string>('');
+  const [editMetaKeywords, setEditMetaKeywords] = useState<string>('');
+  const [editCanonical, setEditCanonical] = useState<string>('');
+  const [editNoIndex, setEditNoIndex] = useState<boolean>(false);
+  const [cmsSaveFeedback, setCmsSaveFeedback] = useState<string | null>(null);
+  const [isSavingCMS, setIsSavingCMS] = useState<boolean>(false);
+
+  // Subscribe to all CMS pages in real-time
+  useEffect(() => {
+    const unsub = subscribeToAllCMSPages((pages) => {
+      setCmsPagesList(pages);
+    });
+    return () => unsub();
+  }, []);
+
+  // Update edit form when selected page changes or pages list loads
+  useEffect(() => {
+    const current = cmsPagesList.find((p) => p.id === selectedCMSPageId) || cmsPagesList[0];
+    if (current) {
+      setEditMetaTitle(current.seo?.metaTitle || '');
+      setEditMetaDesc(current.seo?.metaDescription || '');
+      setEditMetaKeywords(
+        Array.isArray(current.seo?.metaKeywords)
+          ? current.seo.metaKeywords.join(', ')
+          : current.seo?.metaKeywords || ''
+      );
+      setEditCanonical(current.seo?.canonicalUrl || current.slug || '');
+      setEditNoIndex(current.seo?.noIndex || false);
+    }
+  }, [selectedCMSPageId, cmsPagesList]);
+
+  const handleSaveCMSSEO = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingCMS(true);
+    setCmsSaveFeedback(null);
+    try {
+      const keywordsArray = editMetaKeywords
+        .split(',')
+        .map((k) => k.trim())
+        .filter(Boolean);
+
+      const success = await updateCMSPageSEO(selectedCMSPageId, {
+        metaTitle: editMetaTitle.trim(),
+        metaDescription: editMetaDesc.trim(),
+        metaKeywords: keywordsArray,
+        canonicalUrl: editCanonical.trim(),
+        noIndex: editNoIndex
+      });
+
+      if (success) {
+        setCmsSaveFeedback(`SEO metadata for "${selectedCMSPageId}" successfully saved & synced to database!`);
+        setTimeout(() => setCmsSaveFeedback(null), 4000);
+      } else {
+        setCmsSaveFeedback('Failed to update SEO metadata in database.');
+      }
+    } catch (err: any) {
+      setCmsSaveFeedback(`Error: ${err?.message || 'Failed to update'}`);
+    } finally {
+      setIsSavingCMS(false);
+    }
+  };
 
   // Coupon form
   const [newCode, setNewCode] = useState('');
@@ -256,7 +335,7 @@ export default function AdminBillingDashboard({
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-8 text-slate-100" id="admin-billing-view">
-      <SEOHead {...PAGE_SEO.admin} />
+      <SEOHead pageSlug="/admin" pageId="admin" {...PAGE_SEO.admin} />
       
       {/* HEADER ROW */}
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-white/10 pb-6 gap-4">
@@ -313,6 +392,14 @@ export default function AdminBillingDashboard({
             id="tab-admin-plans"
           >
             Plan Editor
+          </button>
+          <button
+            onClick={() => setActiveTab('cms')}
+            className={`px-3.5 py-2 transition duration-200 flex items-center space-x-1.5 ${activeTab === 'cms' ? 'bg-white text-black font-extrabold' : 'text-slate-400 hover:text-slate-200'}`}
+            id="tab-admin-cms"
+          >
+            <Globe className="w-3 h-3" />
+            <span>CMS & SEO</span>
           </button>
         </div>
       </header>
@@ -822,10 +909,10 @@ export default function AdminBillingDashboard({
                     </span>
                   </div>
                   <p className="text-[10px] text-slate-400">
-                    Claude 3.5 Sonnet (PM) & GPT-4o-mini (Architect)
+                    LLaMA 3.3 70B Free, DeepSeek R1 & Chat Free
                   </p>
                   <div className="text-[9px] font-mono text-violet-400">
-                    Models: claude-3.5-sonnet, gpt-4o-mini
+                    Models: llama-3.3-70b-instruct:free, deepseek-r1:free
                   </div>
                   <div className="text-[9px] font-mono text-slate-500">
                     Key: OPENROUTER_API_KEY
@@ -834,7 +921,7 @@ export default function AdminBillingDashboard({
 
                 <div className="pt-2 border-t border-[#222222] flex items-center justify-between">
                   <button
-                    onClick={() => handlePingProvider('openrouter', 'anthropic/claude-3.5-sonnet')}
+                    onClick={() => handlePingProvider('openrouter', 'meta-llama/llama-3.3-70b-instruct:free')}
                     disabled={isPinging === 'openrouter'}
                     className="text-[9px] bg-[#111111] hover:bg-violet-500 hover:text-white px-2.5 py-1 text-slate-200 border border-[#333333] uppercase font-bold transition"
                   >
@@ -1236,6 +1323,331 @@ export default function AdminBillingDashboard({
               Update Plan pricing
             </button>
           </form>
+        </div>
+      )}
+
+      {/* 7. CMS & SEO METADATA MANAGER TAB */}
+      {activeTab === 'cms' && (
+        <div className="space-y-8" id="admin-cms-seo-manager">
+          {/* Top Banner */}
+          <div className="bg-[#111111] border border-[#222222] p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="label text-[9px] text-violet-400">Content Management System • SEO Engine</span>
+                <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] px-2 py-0.5 font-mono uppercase font-bold">
+                  Live DB Synced
+                </span>
+              </div>
+              <h2 className="text-xl font-bold uppercase tracking-wider text-white mt-1">
+                Dynamic SEO Metadata & Indexing Controls
+              </h2>
+              <p className="text-xs text-slate-400 max-w-2xl mt-1">
+                Configure meta titles, descriptions, canonical URLs, and keywords for each page component. Updates are stored in Firestore and propagated dynamically to the document head.
+              </p>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <a
+                href={cmsPagesList.find((p) => p.id === selectedCMSPageId)?.slug || '/'}
+                target="_blank"
+                rel="noreferrer"
+                className="bg-[#1a1a1a] hover:bg-[#252525] border border-[#333333] px-3.5 py-2 text-xs font-mono font-bold text-slate-200 flex items-center space-x-1.5 transition"
+              >
+                <span>View Route</span>
+                <ExternalLink className="w-3.5 h-3.5 text-violet-400" />
+              </a>
+            </div>
+          </div>
+
+          {/* Page Selector Tabs */}
+          <div className="flex items-center space-x-2 overflow-x-auto pb-2 border-b border-[#222222]">
+            {cmsPagesList.map((page) => {
+              const isSelected = selectedCMSPageId === page.id;
+              return (
+                <button
+                  key={page.id}
+                  onClick={() => setSelectedCMSPageId(page.id)}
+                  className={`px-4 py-2.5 text-left border transition shrink-0 ${
+                    isSelected
+                      ? 'bg-violet-600/10 border-violet-500 text-white shadow-lg'
+                      : 'bg-[#111111] border-[#222222] text-slate-400 hover:text-slate-200 hover:border-[#333333]'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <span className="font-mono text-xs font-bold uppercase">{page.id}</span>
+                    <span className="text-[10px] font-mono text-slate-500">{page.slug}</span>
+                    {page.seo?.noIndex && (
+                      <span className="text-[9px] bg-rose-500/20 text-rose-400 px-1 font-mono uppercase">
+                        noindex
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-300 truncate max-w-[180px] mt-0.5">
+                    {page.name}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Save feedback banner */}
+          {cmsSaveFeedback && (
+            <div
+              className={`p-4 border text-xs font-mono flex items-center space-x-3 ${
+                cmsSaveFeedback.includes('successfully')
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              }`}
+            >
+              <CheckCircle className="w-4 h-4 shrink-0" />
+              <span>{cmsSaveFeedback}</span>
+            </div>
+          )}
+
+          {/* Editor & SERP Preview Grid */}
+          <div className="grid lg:grid-cols-12 gap-8">
+            {/* Left: SEO Edit Form */}
+            <div className="lg:col-span-7 bg-[#111111] border border-[#222222] p-6 shadow-xl space-y-6">
+              <div className="border-b border-[#222222] pb-4 flex items-center justify-between">
+                <div>
+                  <span className="label text-[9px] text-violet-400 font-mono">Page Configuration</span>
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-white mt-0.5">
+                    {cmsPagesList.find((p) => p.id === selectedCMSPageId)?.name || selectedCMSPageId}
+                  </h3>
+                </div>
+                <span className="font-mono text-xs text-slate-400 bg-black/40 px-2.5 py-1 border border-[#222222]">
+                  Slug: {cmsPagesList.find((p) => p.id === selectedCMSPageId)?.slug}
+                </span>
+              </div>
+
+              <form onSubmit={handleSaveCMSSEO} className="space-y-5 text-xs">
+                {/* Meta Title */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="label text-[9px] text-slate-300 uppercase">
+                      Meta Title (Browser Tab & Search Title)
+                    </label>
+                    <span
+                      className={`text-[10px] font-mono ${
+                        editMetaTitle.length >= 40 && editMetaTitle.length <= 65
+                          ? 'text-emerald-400'
+                          : 'text-amber-400'
+                      }`}
+                    >
+                      {editMetaTitle.length} chars (Optimal: 50–60)
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={editMetaTitle}
+                    onChange={(e) => setEditMetaTitle(e.target.value)}
+                    placeholder="e.g. Platform Features | DevForge AI"
+                    className="w-full bg-[#050505] border border-[#222222] px-3.5 py-2.5 outline-none focus:border-violet-500 font-sans text-slate-100 placeholder:text-slate-600 text-sm"
+                    id="cms-seo-title-input"
+                  />
+                </div>
+
+                {/* Meta Description */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="label text-[9px] text-slate-300 uppercase">
+                      Meta Description (Search Snippet)
+                    </label>
+                    <span
+                      className={`text-[10px] font-mono ${
+                        editMetaDesc.length >= 130 && editMetaDesc.length <= 165
+                          ? 'text-emerald-400'
+                          : 'text-amber-400'
+                      }`}
+                    >
+                      {editMetaDesc.length} chars (Optimal: 150–160)
+                    </span>
+                  </div>
+                  <textarea
+                    rows={3}
+                    required
+                    value={editMetaDesc}
+                    onChange={(e) => setEditMetaDesc(e.target.value)}
+                    placeholder="Provide a concise, high-impact summary for search engines..."
+                    className="w-full bg-[#050505] border border-[#222222] px-3.5 py-2.5 outline-none focus:border-violet-500 font-sans text-slate-100 placeholder:text-slate-600 text-xs leading-relaxed"
+                    id="cms-seo-desc-input"
+                  />
+                </div>
+
+                {/* Meta Keywords */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="label text-[9px] text-slate-300 uppercase">
+                      Target Keywords (Comma-Separated)
+                    </label>
+                    <span className="text-[10px] font-mono text-slate-500">
+                      {editMetaKeywords.split(',').filter((k) => k.trim()).length} terms defined
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={editMetaKeywords}
+                    onChange={(e) => setEditMetaKeywords(e.target.value)}
+                    placeholder="AI software engineer, autonomous coding agents, React code generator"
+                    className="w-full bg-[#050505] border border-[#222222] px-3.5 py-2.5 outline-none focus:border-violet-500 font-mono text-slate-100 placeholder:text-slate-600 text-xs"
+                    id="cms-seo-keywords-input"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Separate keywords with commas. These populate the HTML <code className="text-violet-400">&lt;meta name="keywords"&gt;</code> tag and structured taxonomy.
+                  </p>
+                </div>
+
+                {/* Canonical URL */}
+                <div className="space-y-1.5">
+                  <label className="label text-[9px] text-slate-300 uppercase">Canonical URL Path</label>
+                  <input
+                    type="text"
+                    value={editCanonical}
+                    onChange={(e) => setEditCanonical(e.target.value)}
+                    placeholder="/features"
+                    className="w-full bg-[#050505] border border-[#222222] px-3.5 py-2 outline-none focus:border-violet-500 font-mono text-slate-100 placeholder:text-slate-600 text-xs"
+                    id="cms-seo-canonical-input"
+                  />
+                </div>
+
+                {/* NoIndex Toggle */}
+                <div className="pt-2">
+                  <label className="flex items-center space-x-3 cursor-pointer select-none bg-[#0a0a0a] border border-[#222222] p-3 hover:border-[#333333]">
+                    <input
+                      type="checkbox"
+                      checked={editNoIndex}
+                      onChange={(e) => setEditNoIndex(e.target.checked)}
+                      className="w-4 h-4 text-violet-600 bg-black border-[#333333] rounded focus:ring-0"
+                    />
+                    <div className="text-xs">
+                      <div className="font-bold text-slate-200">NoIndex Directive</div>
+                      <div className="text-[11px] text-slate-400">
+                        Signal robots not to index this page (e.g. admin panels or private workspaces).
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Submit button */}
+                <div className="pt-4 border-t border-[#222222] flex items-center justify-between">
+                  <div className="text-[11px] text-slate-500 font-mono">
+                    Target Collection: <span className="text-violet-400">cms_pages/{selectedCMSPageId}</span>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isSavingCMS}
+                    className="bg-white hover:bg-violet-400 text-black px-6 py-2.5 font-bold uppercase tracking-widest text-[10px] transition duration-200 flex items-center space-x-2 disabled:opacity-50"
+                    id="save-cms-seo-btn"
+                  >
+                    {isSavingCMS ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Saving to Cloud...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Save & Push SEO to Cloud</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Right: Real-time Search Engine Snippet Preview */}
+            <div className="lg:col-span-5 space-y-6">
+              {/* Google SERP Card */}
+              <div className="bg-[#111111] border border-[#222222] p-6 shadow-xl space-y-4">
+                <div className="flex items-center justify-between border-b border-[#222222] pb-3">
+                  <span className="label text-[9px] text-emerald-400 font-mono">
+                    Google SERP Preview
+                  </span>
+                  <span className="text-[10px] font-mono text-slate-500">Desktop & Mobile View</span>
+                </div>
+
+                <div className="bg-white text-[#202124] p-5 rounded-lg font-sans space-y-1.5 shadow-md">
+                  {/* Google Breadcrumb URL */}
+                  <div className="flex items-center space-x-1.5 text-xs text-[#202124]/70">
+                    <div className="w-4 h-4 rounded-full bg-violet-600 flex items-center justify-center text-[9px] text-white font-bold">
+                      D
+                    </div>
+                    <span className="text-[#202124] font-medium">DevForge AI</span>
+                    <span>›</span>
+                    <span className="text-[#5f6368] font-mono text-[11px]">
+                      {editCanonical || cmsPagesList.find((p) => p.id === selectedCMSPageId)?.slug}
+                    </span>
+                  </div>
+
+                  {/* Title */}
+                  <h4 className="text-[#1a0dab] hover:underline text-lg font-medium leading-snug cursor-pointer line-clamp-2">
+                    {editMetaTitle || 'DevForge AI | Autonomous Multi-Agent Software Engineering'}
+                  </h4>
+
+                  {/* Description */}
+                  <p className="text-[#4d5156] text-xs leading-relaxed line-clamp-3">
+                    {editMetaDesc || 'Generate full-stack software with autonomous AI agent swarms.'}
+                  </p>
+                </div>
+
+                <div className="text-[11px] text-slate-400 font-mono space-y-1">
+                  <div className="flex justify-between">
+                    <span>Indexed Index Status:</span>
+                    <span className={editNoIndex ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>
+                      {editNoIndex ? 'noindex, nofollow' : 'index, follow'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Canonical Tag:</span>
+                    <span className="text-slate-300 truncate max-w-[220px]">
+                      {editCanonical || '/'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Keywords taxonomy card */}
+              <div className="bg-[#111111] border border-[#222222] p-6 shadow-xl space-y-4">
+                <span className="label text-[9px] text-violet-400 font-mono">
+                  Indexed Keywords Taxonomy
+                </span>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {editMetaKeywords
+                    .split(',')
+                    .map((k) => k.trim())
+                    .filter(Boolean).length > 0 ? (
+                    editMetaKeywords
+                      .split(',')
+                      .map((k) => k.trim())
+                      .filter(Boolean)
+                      .map((term, i) => (
+                        <span
+                          key={i}
+                          className="bg-[#1a1a1a] border border-[#333333] text-slate-300 px-2.5 py-1 text-[11px] font-mono flex items-center space-x-1"
+                        >
+                          <span className="text-violet-400">#</span>
+                          <span>{term}</span>
+                        </span>
+                      ))
+                  ) : (
+                    <span className="text-xs text-slate-500 italic">No keywords entered yet.</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Dynamic Head Updater Info Card */}
+              <div className="bg-gradient-to-br from-violet-950/20 to-slate-900 border border-violet-500/20 p-5 space-y-2">
+                <div className="flex items-center space-x-2 text-violet-400 text-xs font-bold uppercase tracking-wider">
+                  <Sparkles className="w-4 h-4" />
+                  <span>Dynamic Document Head Updater Active</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Every page component in DevForge AI embeds the reactive <code className="text-violet-300 font-mono">&lt;SEOHead /&gt;</code> updater. Saving above updates this page's document head in all browser windows in real time!
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

@@ -73,7 +73,7 @@ export default function ExportProjectModal({ project, isOpen, onClose }: ExportP
               dependencies: {
                 react: '^19.0.0',
                 'react-dom': '^19.0.0',
-                'lucide-react': '^0.450.0'
+                'lucide-react': '^0.460.0'
               },
               devDependencies: {
                 vite: '^6.0.0',

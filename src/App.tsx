@@ -189,6 +189,7 @@ function AppContent() {
       try {
         await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
       } catch (e) {}
+      localStorage.removeItem(`devforge_project_${projectId}`);
       setProjects((prev) => prev.filter((p) => p.id !== projectId));
     } catch (err) {
       console.error('Error deleting project:', err);

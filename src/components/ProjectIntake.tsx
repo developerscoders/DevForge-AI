@@ -29,8 +29,8 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
   // Model Routing options matching requested multi-provider architecture
   const [modelConfig, setModelConfig] = useState<Record<string, string>>({
     'CEO Orchestrator': 'gemini-2.5-flash',
-    'Product Manager': 'anthropic/claude-3.5-sonnet',
-    'Solution Architect': 'openai/gpt-4o-mini',
+    'Product Manager': 'openai/gpt-4o-mini',
+    'Solution Architect': 'deepseek/deepseek-r1',
     'Frontend Engineer': 'meta/llama-3.1-70b-instruct',
     'QA/Test Engineer': 'llama-3.3-70b-versatile',
     'DevOps Engineer': 'mixtral-8x7b-32768',
@@ -64,13 +64,17 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
       { label: 'Gemini 2.5 Pro (Google)', value: 'gemini-2.5-pro', provider: 'gemini' }
     ],
     'Product Manager': [
-      { label: 'Claude 3.5 Sonnet (OpenRouter)', value: 'anthropic/claude-3.5-sonnet', provider: 'openrouter' },
-      { label: 'Gemini 2.5 Flash (Google)', value: 'gemini-2.5-flash', provider: 'gemini' },
-      { label: 'DeepSeek R1 (OpenRouter)', value: 'deepseek/deepseek-r1', provider: 'openrouter' }
+      { label: 'LLaMA 3.3 70B (OpenRouter Free)', value: 'meta-llama/llama-3.3-70b-instruct:free', provider: 'openrouter' },
+      { label: 'DeepSeek Chat V3 (OpenRouter Free)', value: 'deepseek/deepseek-chat:free', provider: 'openrouter' },
+      { label: 'DeepSeek R1 (OpenRouter Free)', value: 'deepseek/deepseek-r1:free', provider: 'openrouter' },
+      { label: 'Auto Free Router (OpenRouter)', value: 'openrouter/free', provider: 'openrouter' },
+      { label: 'Gemini 2.5 Flash (Google)', value: 'gemini-2.5-flash', provider: 'gemini' }
     ],
     'Solution Architect': [
-      { label: 'GPT-4o Mini (OpenRouter)', value: 'openai/gpt-4o-mini', provider: 'openrouter' },
-      { label: 'Claude 3.5 Sonnet (OpenRouter)', value: 'anthropic/claude-3.5-sonnet', provider: 'openrouter' },
+      { label: 'DeepSeek R1 Reasoning (OpenRouter Free)', value: 'deepseek/deepseek-r1:free', provider: 'openrouter' },
+      { label: 'DeepSeek Chat V3 (OpenRouter Free)', value: 'deepseek/deepseek-chat:free', provider: 'openrouter' },
+      { label: 'Qwen 2.5 Coder 32B (OpenRouter Free)', value: 'qwen/qwen-2.5-coder-32b-instruct:free', provider: 'openrouter' },
+      { label: 'LLaMA 3.3 70B (OpenRouter Free)', value: 'meta-llama/llama-3.3-70b-instruct:free', provider: 'openrouter' },
       { label: 'Gemini 2.5 Pro (Google)', value: 'gemini-2.5-pro', provider: 'gemini' }
     ],
     'Frontend Engineer': [
@@ -81,7 +85,7 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
     'QA/Test Engineer': [
       { label: 'LLaMA 3.3 70B Versatile (Groq Free)', value: 'llama-3.3-70b-versatile', provider: 'groq' },
       { label: 'Mixtral 8x7B (Groq Free)', value: 'mixtral-8x7b-32768', provider: 'groq' },
-      { label: 'GPT-4o Mini (OpenRouter)', value: 'openai/gpt-4o-mini', provider: 'openrouter' }
+      { label: 'DeepSeek R1 (OpenRouter Free)', value: 'deepseek/deepseek-r1:free', provider: 'openrouter' }
     ],
     'DevOps Engineer': [
       { label: 'Mixtral 8x7B 32k (Groq Free)', value: 'mixtral-8x7b-32768', provider: 'groq' },
@@ -231,7 +235,7 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 grid lg:grid-cols-12 gap-8 text-slate-100" id="project-intake">
-      <SEOHead {...PAGE_SEO.home} />
+      <SEOHead pageSlug="/" pageId="home" {...PAGE_SEO.home} />
       
       {/* LEFT PANEL: Prompt Area and Presets */}
       <div className="lg:col-span-7 space-y-8">

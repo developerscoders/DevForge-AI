@@ -1,12 +1,21 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { SEOProps, SITE_CONFIG } from '../lib/seoConfig';
+import { subscribeToCMSPage, normalizeSlug, getDefaultCMSPage } from '../lib/cmsService';
+import { CMSPage } from '../types';
 
-interface SEOHeadProps extends SEOProps {
+export interface SEOHeadProps extends SEOProps {
   appName?: string;
+  pageSlug?: string;
+  pageId?: string;
 }
 
-export default function SEOHead({
+/**
+ * Custom React Hook that dynamically updates the browser document head,
+ * metadata tags, canonical link, Open Graph, Twitter Cards, and JSON-LD structured data.
+ * Real-time synced with Firestore CMS page SEO metadata.
+ */
+export function useDocumentHead({
   title,
   description,
   keywords,
@@ -15,12 +24,37 @@ export default function SEOHead({
   ogImage,
   noindex = false,
   structuredData,
+  pageSlug,
+  pageId,
 }: SEOHeadProps) {
   const location = useLocation();
+  const activeSlug = pageSlug || location.pathname;
+  const targetIdentifier = pageId || activeSlug;
+
+  // Initialize with static default CMS page if available to avoid flicker
+  const initialDefault = getDefaultCMSPage(targetIdentifier);
+  const [cmsPage, setCmsPage] = useState<CMSPage | null>(initialDefault || null);
+
+  // Subscribe to real-time CMS Page updates from Firestore
+  useEffect(() => {
+    const unsubscribe = subscribeToCMSPage(targetIdentifier, (updatedPage) => {
+      if (updatedPage) {
+        setCmsPage(updatedPage);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [targetIdentifier]);
 
   useEffect(() => {
+    // Determine final values: CMS metadata takes precedence when present, falling back to component props, then site defaults
+    const cmsSeo = cmsPage?.seo;
+
     // 1. Title
-    const finalTitle = title ? `${title}` : `${SITE_CONFIG.name} | ${SITE_CONFIG.tagline}`;
+    const rawTitle = cmsSeo?.metaTitle || title;
+    const finalTitle = rawTitle ? `${rawTitle}` : `${SITE_CONFIG.name} | ${SITE_CONFIG.tagline}`;
     document.title = finalTitle;
 
     // Helper to safely set or create a meta tag
@@ -46,33 +80,40 @@ export default function SEOHead({
     };
 
     // 2. Canonical URL
-    const currentOrigin = typeof window !== 'undefined' && window.location.origin
-      ? window.location.origin
-      : SITE_CONFIG.domain;
-    const cleanCanonicalPath = canonical || location.pathname;
-    const fullCanonicalUrl = cleanCanonicalPath.startsWith('http')
-      ? cleanCanonicalPath
-      : `${currentOrigin}${cleanCanonicalPath.startsWith('/') ? '' : '/'}${cleanCanonicalPath}`;
+    const currentOrigin =
+      typeof window !== 'undefined' && window.location.origin
+        ? window.location.origin
+        : SITE_CONFIG.domain;
+
+    const rawCanonical = cmsSeo?.canonicalUrl || canonical || activeSlug;
+    const fullCanonicalUrl = rawCanonical.startsWith('http')
+      ? rawCanonical
+      : `${currentOrigin}${rawCanonical.startsWith('/') ? '' : '/'}${rawCanonical}`;
 
     setLinkTag('canonical', fullCanonicalUrl);
 
-    // 3. Standard SEO Metas
-    const finalDescription = description || SITE_CONFIG.defaultDescription;
+    // 3. Standard SEO Description & Keywords
+    const finalDescription = cmsSeo?.metaDescription || description || SITE_CONFIG.defaultDescription;
     setMetaTag('name', 'description', finalDescription);
 
-    const normalizedKeywords: string[] = Array.isArray(keywords)
-      ? keywords
-      : typeof keywords === 'string'
-      ? keywords.split(',').map((k) => k.trim())
+    const rawKeywords = cmsSeo?.metaKeywords || keywords;
+    const normalizedKeywords: string[] = Array.isArray(rawKeywords)
+      ? rawKeywords
+      : typeof rawKeywords === 'string'
+      ? rawKeywords.split(',').map((k) => k.trim())
       : [];
 
-    const finalKeywords = normalizedKeywords.length > 0
-      ? Array.from(new Set([...normalizedKeywords, ...SITE_CONFIG.defaultKeywords])).join(', ')
-      : SITE_CONFIG.defaultKeywords.join(', ');
+    const finalKeywords =
+      normalizedKeywords.length > 0
+        ? Array.from(new Set([...normalizedKeywords, ...SITE_CONFIG.defaultKeywords])).join(', ')
+        : SITE_CONFIG.defaultKeywords.join(', ');
     setMetaTag('name', 'keywords', finalKeywords);
 
     // Robots directive
-    const robotsContent = noindex ? 'noindex, nofollow' : 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
+    const isNoIndex = cmsSeo?.noIndex !== undefined ? cmsSeo.noIndex : noindex;
+    const robotsContent = isNoIndex
+      ? 'noindex, nofollow'
+      : 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
     setMetaTag('name', 'robots', robotsContent);
     setMetaTag('name', 'googlebot', robotsContent);
 
@@ -82,10 +123,11 @@ export default function SEOHead({
     setMetaTag('name', 'theme-color', '#050505');
 
     // 4. Open Graph Tags
-    const finalOgImage = ogImage || SITE_CONFIG.defaultOgImage;
+    const finalOgType = cmsSeo?.ogType || ogType;
+    const finalOgImage = cmsSeo?.ogImage || ogImage || SITE_CONFIG.defaultOgImage;
     setMetaTag('property', 'og:title', finalTitle);
     setMetaTag('property', 'og:description', finalDescription);
-    setMetaTag('property', 'og:type', ogType);
+    setMetaTag('property', 'og:type', finalOgType);
     setMetaTag('property', 'og:url', fullCanonicalUrl);
     setMetaTag('property', 'og:image', finalOgImage);
     setMetaTag('property', 'og:site_name', SITE_CONFIG.name);
@@ -122,10 +164,37 @@ export default function SEOHead({
       }
     };
 
-    const payload = structuredData || defaultWebsiteSchema;
-    scriptElement.textContent = JSON.stringify(payload, null, 2);
+    const finalStructuredData = cmsSeo?.structuredData || structuredData || defaultWebsiteSchema;
+    scriptElement.textContent = JSON.stringify(finalStructuredData, null, 2);
+  }, [
+    cmsPage,
+    title,
+    description,
+    keywords,
+    canonical,
+    ogType,
+    ogImage,
+    noindex,
+    structuredData,
+    activeSlug
+  ]);
 
-  }, [title, description, keywords, canonical, ogType, ogImage, noindex, structuredData, location.pathname]);
+  return {
+    currentTitle: cmsPage?.seo?.metaTitle || title || `${SITE_CONFIG.name} | ${SITE_CONFIG.tagline}`,
+    currentDescription: cmsPage?.seo?.metaDescription || description || SITE_CONFIG.defaultDescription,
+    currentKeywords: cmsPage?.seo?.metaKeywords || keywords || SITE_CONFIG.defaultKeywords,
+    cmsPage
+  };
+}
 
+/**
+ * Dynamic Document Head Updater Component
+ * Renders in each page component to dynamically inject SEO meta tags, title, OpenGraph, and JSON-LD schema.
+ */
+export default function SEOHead(props: SEOHeadProps) {
+  useDocumentHead(props);
   return null;
 }
+
+// Named alias for explicit semantic use
+export const DynamicHeadUpdater = SEOHead;

@@ -23,6 +23,7 @@ import {
   Copy,
   Check
 } from 'lucide-react';
+import LiveInteractiveApp from './LiveInteractiveApp';
 
 interface LiveSandboxPreviewProps {
   project: Project;
@@ -246,124 +247,10 @@ export default function LiveSandboxPreview({ project, onExport }: LiveSandboxPre
 
           {/* App Body Content based on Active Tab */}
           <div className="p-6 flex-1 space-y-6 overflow-y-auto">
-            {/* Overview / Dashboard Tab */}
+            {/* Overview / Interactive App Tab */}
             {activeNavTab === 'dashboard' && (
-              <div className="space-y-6">
-                {/* Hero / Description Banner */}
-                <div className="bg-gradient-to-r from-violet-950/30 via-[#101015] to-[#0a0a0c] border border-violet-500/20 p-5 rounded-lg space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-violet-400 font-bold">
-                      Autonomous Project Build
-                    </span>
-                    <span className="text-[9px] font-mono text-slate-400">Deployed to Port 3000</span>
-                  </div>
-                  <h4 className="text-xl font-bold text-white uppercase tracking-wide">{project.name}</h4>
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {project.description || project.prompt}
-                  </p>
-                </div>
-
-                {/* KPI Metrics */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="bg-[#121215] border border-[#222222] p-4 rounded-lg">
-                    <div className="text-[10px] font-mono text-slate-500 uppercase">Interactive Records</div>
-                    <div className="text-2xl font-bold text-white font-mono mt-1">{itemCount}</div>
-                    <div className="text-[9px] text-emerald-400 font-mono mt-1">↑ Active State Hook</div>
-                  </div>
-                  <div className="bg-[#121215] border border-[#222222] p-4 rounded-lg">
-                    <div className="text-[10px] font-mono text-slate-500 uppercase">Container Latency</div>
-                    <div className="text-2xl font-bold text-emerald-400 font-mono mt-1">12 ms</div>
-                    <div className="text-[9px] text-slate-400 font-mono mt-1">Ingress In-Memory</div>
-                  </div>
-                  <div className="bg-[#121215] border border-[#222222] p-4 rounded-lg">
-                    <div className="text-[10px] font-mono text-slate-500 uppercase">Security Score</div>
-                    <div className="text-2xl font-bold text-violet-400 font-mono mt-1">100 / 100</div>
-                    <div className="text-[9px] text-emerald-400 font-mono mt-1">0 OWASP Vulnerabilities</div>
-                  </div>
-                </div>
-
-                {/* Interactive Action Controls */}
-                <div className="bg-[#121215] border border-[#222222] p-5 rounded-lg space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <h5 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                      Interactive Feature Controls
-                    </h5>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => {
-                          setItemCount((prev) => prev + 1);
-                          triggerNotice(`Added new entity record #${itemCount + 1}`);
-                        }}
-                        className="bg-white hover:bg-violet-400 text-black px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition flex items-center space-x-1"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Add Record</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setItemCount(12);
-                          triggerNotice('Reset demo dataset to baseline state.');
-                        }}
-                        className="bg-[#18181b] hover:bg-[#222] text-slate-300 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border border-[#333] transition"
-                      >
-                        Reset
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Search Bar */}
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-slate-500" />
-                    <input
-                      type="text"
-                      placeholder="Search mock database entities..."
-                      value={simulatedSearch}
-                      onChange={(e) => setSimulatedSearch(e.target.value)}
-                      className="w-full bg-[#08080a] border border-[#222] pl-9 pr-4 py-2 text-xs text-white placeholder-slate-600 outline-none focus:border-violet-500"
-                    />
-                  </div>
-
-                  {/* Mock Records Table */}
-                  <div className="border border-[#222] overflow-x-auto text-[11px] font-mono">
-                    <table className="w-full text-left">
-                      <thead className="bg-[#08080a] text-slate-400 border-b border-[#222]">
-                        <tr>
-                          <th className="p-2.5">ID</th>
-                          <th className="p-2.5">Module Name</th>
-                          <th className="p-2.5">Status</th>
-                          <th className="p-2.5">Assigned Lead</th>
-                          <th className="p-2.5 text-right">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#1a1a1d] text-slate-300">
-                        {Array.from({ length: Math.min(itemCount, 5) }).map((_, idx) => (
-                          <tr key={idx} className="hover:bg-[#18181b]/50">
-                            <td className="p-2.5 text-slate-500">#00{idx + 1}</td>
-                            <td className="p-2.5 font-bold text-white">
-                              {idx === 0 ? 'Authentication & Sessions' : idx === 1 ? 'Data Schema Contracts' : idx === 2 ? 'Frontend Interactive Canvas' : idx === 3 ? 'QA Assertions Suite' : 'Docker Health Daemon'}
-                            </td>
-                            <td className="p-2.5">
-                              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 text-[9px] font-bold">
-                                Verified
-                              </span>
-                            </td>
-                            <td className="p-2.5 text-slate-400">
-                              {idx === 0 ? 'Aria CEO' : idx === 1 ? 'Sophia Lead' : idx === 2 ? 'Frank Lead' : idx === 3 ? 'Quinn Lead' : 'Devon Lead'}
-                            </td>
-                            <td className="p-2.5 text-right">
-                              <button
-                                onClick={() => triggerNotice(`Triggered execution probe for module #00${idx + 1}`)}
-                                className="text-violet-400 hover:text-violet-300 text-[10px] underline font-bold"
-                              >
-                                Probe
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+              <div className="space-y-4">
+                <LiveInteractiveApp project={project} />
               </div>
             )}
 

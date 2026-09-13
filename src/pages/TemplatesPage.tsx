@@ -118,7 +118,7 @@ export default function TemplatesPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-12 space-y-12 text-slate-100" id="templates-page">
-      <SEOHead {...PAGE_SEO.templates} />
+      <SEOHead pageSlug="/templates" pageId="templates" {...PAGE_SEO.templates} />
 
       {/* Hero Header */}
       <div className="text-center max-w-3xl mx-auto space-y-4">

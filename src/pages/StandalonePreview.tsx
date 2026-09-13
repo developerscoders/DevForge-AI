@@ -24,9 +24,14 @@ import {
   Monitor,
   CheckCircle2,
   Zap,
-  Play
+  Play,
+  Share2,
+  Github
 } from 'lucide-react';
 import { fetchFirestoreProjectById } from '../lib/firestoreService';
+import SEOHead from '../components/SEOHead';
+import LiveInteractiveApp from '../components/LiveInteractiveApp';
+import DeploySubmitModal from '../components/DeploySubmitModal';
 
 interface StandalonePreviewProps {
   projects?: Project[];
@@ -40,6 +45,7 @@ export default function StandalonePreview({ projects = [] }: StandalonePreviewPr
   const [viewport, setViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [selectedFileForModal, setSelectedFileForModal] = useState<string | null>(null);
+  const [showDeployModal, setShowDeployModal] = useState(false);
 
   // Live Interactive App State
   const [entities, setEntities] = useState<EntityItem[]>([
@@ -110,9 +116,13 @@ export default function StandalonePreview({ projects = [] }: StandalonePreviewPr
         setProject({
           id,
           name: 'Live Autonomous Application',
+          description: 'Autonomous application preview deployed on port 3000',
           prompt: 'Autonomous application preview deployed on port 3000',
           status: 'deployed',
           createdAt: new Date().toISOString(),
+          aiCreditsUsed: 350,
+          modelConfig: { 'Architect': 'gemini-2.5-flash', 'Coder': 'claude-3-5-sonnet' },
+          agents: [],
           files: [
             { path: 'src/App.tsx', name: 'App.tsx', type: 'file', content: '// Live Autonomous Application\nimport React from "react";' },
             { path: 'server/server.ts', name: 'server.ts', type: 'file', content: '// Express API Gateway\nimport express from "express";' }
@@ -218,6 +228,13 @@ export default function StandalonePreview({ projects = [] }: StandalonePreviewPr
 
   return (
     <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col font-sans selection:bg-violet-500 selection:text-white" id="standalone-live-preview">
+      <SEOHead
+        pageSlug={`/preview/${id}`}
+        pageId={`preview-${id}`}
+        title={`Live Preview: ${appName} | DevForge AI Cloud Runner`}
+        description={appDesc}
+        keywords={['DevForge live preview', appName, 'cloud runner', 'real-time sandbox']}
+      />
       {/* 1. Global DevForge Live Preview Header Bar */}
       <div className="bg-[#050505] border-b border-[#222222] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs select-none sticky top-0 z-40">
         {/* Left: Brand & Return */}
@@ -269,8 +286,29 @@ export default function StandalonePreview({ projects = [] }: StandalonePreviewPr
           </div>
         </div>
 
-        {/* Right: Viewport Resizers */}
-        <div className="flex items-center space-x-2">
+        {/* Right: Deploy Action & Viewport Resizers */}
+        <div className="flex items-center space-x-2.5">
+          {project?.vercelDeployUrl && (
+            <a
+              href={project.vercelDeployUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition flex items-center space-x-1"
+            >
+              <ExternalLink className="w-3 h-3" />
+              <span className="hidden sm:inline">Vercel Live</span>
+            </a>
+          )}
+
+          <button
+            onClick={() => setShowDeployModal(true)}
+            className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition flex items-center space-x-1.5 shadow"
+            title="Deploy and Submit to GitHub & Vercel"
+          >
+            <Share2 className="w-3 h-3" />
+            <span>Deploy</span>
+          </button>
+
           <div className="flex items-center bg-[#111111] border border-[#222222] p-0.5">
             <button
               onClick={() => setViewport('desktop')}
@@ -348,111 +386,10 @@ export default function StandalonePreview({ projects = [] }: StandalonePreviewPr
             </div>
           </div>
 
-          {/* Tab 1: App Overview / Dashboard */}
+          {/* Tab 1: Live Interactive Operational Application */}
           {activeTab === 'app' && (
-            <div className="p-6 space-y-6 flex-1 overflow-y-auto">
-              {/* Hero Banner */}
-              <div className="bg-gradient-to-r from-violet-950/40 via-[#121215] to-[#09090b] border border-violet-500/20 p-6 rounded-xl space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono text-violet-400 uppercase tracking-widest font-bold flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Autonomous Full-Stack Deployment</span>
-                  </span>
-                  <span className="text-[9px] font-mono text-slate-400 bg-slate-900 border border-[#333] px-2 py-0.5">
-                    Express + React 19 + SQL
-                  </span>
-                </div>
-                <h2 className="text-2xl font-black text-white uppercase tracking-tight">{appName}</h2>
-                <p className="text-xs text-slate-300 max-w-3xl leading-relaxed">
-                  {appDesc}
-                </p>
-              </div>
-
-              {/* KPI Telemetry Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-[#121215] border border-[#222222] p-4 rounded-xl">
-                  <div className="text-[10px] font-mono text-slate-500 uppercase">Live DB Records</div>
-                  <div className="text-2xl font-bold font-mono text-white mt-1">{entities.length}</div>
-                  <div className="text-[9px] text-emerald-400 font-mono mt-1">↑ Active Persistence</div>
-                </div>
-
-                <div className="bg-[#121215] border border-[#222222] p-4 rounded-xl">
-                  <div className="text-[10px] font-mono text-slate-500 uppercase">Active Sessions</div>
-                  <div className="text-2xl font-bold font-mono text-violet-400 mt-1">{stats.activeUsers}</div>
-                  <div className="text-[9px] text-violet-400 font-mono mt-1">Ingress Port 3000</div>
-                </div>
-
-                <div className="bg-[#121215] border border-[#222222] p-4 rounded-xl">
-                  <div className="text-[10px] font-mono text-slate-500 uppercase">API Latency</div>
-                  <div className="text-2xl font-bold font-mono text-emerald-400 mt-1">{stats.latencyMs} ms</div>
-                  <div className="text-[9px] text-slate-400 font-mono mt-1">Zero Overhead Bridge</div>
-                </div>
-
-                <div className="bg-[#121215] border border-[#222222] p-4 rounded-xl">
-                  <div className="text-[10px] font-mono text-slate-500 uppercase">SRE Uptime SLA</div>
-                  <div className="text-2xl font-bold font-mono text-cyan-400 mt-1">{stats.uptime}</div>
-                  <div className="text-[9px] text-cyan-400 font-mono mt-1">0 Faults Detected</div>
-                </div>
-              </div>
-
-              {/* Quick Actions & Recent Stream */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 bg-[#121215] border border-[#222222] p-5 rounded-xl space-y-3">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-white flex items-center justify-between">
-                    <span>Recent Live Database Entities</span>
-                    <button
-                      onClick={() => setActiveTab('records')}
-                      className="text-violet-400 hover:text-violet-300 text-[10px] font-mono font-bold"
-                    >
-                      Manage All →
-                    </button>
-                  </h3>
-                  <div className="border border-[#222222] overflow-x-auto text-xs font-mono">
-                    <table className="w-full text-left">
-                      <thead className="bg-[#08080a] text-slate-400 border-b border-[#222]">
-                        <tr>
-                          <th className="p-2.5">ID</th>
-                          <th className="p-2.5">Title</th>
-                          <th className="p-2.5">Category</th>
-                          <th className="p-2.5">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#18181b] text-slate-300">
-                        {entities.slice(0, 4).map(e => (
-                          <tr key={e.id} className="hover:bg-[#18181b]/50">
-                            <td className="p-2.5 text-slate-500 font-mono">#{e.id.substring(0, 6)}</td>
-                            <td className="p-2.5 font-bold text-white">{e.title}</td>
-                            <td className="p-2.5 text-slate-400">{e.category}</td>
-                            <td className="p-2.5">
-                              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] px-1.5 py-0.5 font-bold uppercase">
-                                {e.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="bg-[#121215] border border-[#222222] p-5 rounded-xl space-y-3">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-white">System Diagnostics</h3>
-                  <div className="space-y-2 text-xs font-mono">
-                    <div className="bg-[#08080a] p-2.5 border border-[#222] flex items-center justify-between text-slate-300">
-                      <span>Express Server</span>
-                      <span className="text-emerald-400 font-bold text-[10px]">READY</span>
-                    </div>
-                    <div className="bg-[#08080a] p-2.5 border border-[#222] flex items-center justify-between text-slate-300">
-                      <span>SQL Schema Engine</span>
-                      <span className="text-emerald-400 font-bold text-[10px]">SYNCED</span>
-                    </div>
-                    <div className="bg-[#08080a] p-2.5 border border-[#222] flex items-center justify-between text-slate-300">
-                      <span>Security Audit</span>
-                      <span className="text-violet-400 font-bold text-[10px]">0 OWASP</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div className="p-4 md:p-6 flex-1 overflow-y-auto">
+              <LiveInteractiveApp project={project} />
             </div>
           )}
 
@@ -716,6 +653,14 @@ export default function StandalonePreview({ projects = [] }: StandalonePreviewPr
           </div>
         </div>
       </div>
+
+      {/* Deploy and Submit to GitHub / Vercel Modal */}
+      <DeploySubmitModal
+        project={project}
+        isOpen={showDeployModal}
+        onClose={() => setShowDeployModal(false)}
+        onProjectUpdated={(updated) => setProject(updated)}
+      />
     </div>
   );
 }

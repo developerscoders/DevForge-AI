@@ -17,7 +17,8 @@ import {
   Layers,
   Sparkles,
   Server,
-  Filter
+  Filter,
+  RefreshCw
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -35,6 +36,7 @@ export default function ProjectDashboard({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteConfirmProject, setDeleteConfirmProject] = useState<Project | null>(null);
 
   const filteredProjects = projects.filter((p) => {
     const matchesSearch =
@@ -51,18 +53,26 @@ export default function ProjectDashboard({
   const totalCredits = projects.reduce((acc, p) => acc + (p.aiCreditsUsed || 0), 0);
   const activeContainers = projects.filter((p) => p.status === 'deployed' || p.status === 'coding').length;
 
-  const handleDelete = async (e: React.MouseEvent, id: string) => {
+  const handleDeleteClick = (e: React.MouseEvent, project: Project) => {
     e.preventDefault();
     e.stopPropagation();
-    if (confirm('Are you sure you want to delete this project workspace? This will permanently remove all files and records from Firestore.')) {
-      setDeletingId(id);
-      try {
-        if (onDeleteProject) {
-          await onDeleteProject(id);
-        }
-      } finally {
-        setDeletingId(null);
+    setDeleteConfirmProject(project);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmProject) return;
+    const id = deleteConfirmProject.id;
+    setDeletingId(id);
+    try {
+      if (onDeleteProject) {
+        await onDeleteProject(id);
       }
+      setDeleteConfirmProject(null);
+    } catch (err) {
+      console.error('Failed to delete project:', err);
+      setDeleteConfirmProject(null);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -76,7 +86,7 @@ export default function ProjectDashboard({
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 space-y-8 text-slate-100" id="project-dashboard">
-      <SEOHead {...PAGE_SEO.projects} />
+      <SEOHead pageSlug="/projects" pageId="projects" {...PAGE_SEO.projects} />
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-white/10 pb-6">
         <div>
@@ -278,7 +288,7 @@ export default function ProjectDashboard({
                       {/* Delete Button */}
                       {onDeleteProject && (
                         <button
-                          onClick={(e) => handleDelete(e, p.id)}
+                          onClick={(e) => handleDeleteClick(e, p)}
                           disabled={deletingId === p.id}
                           title="Delete Project"
                           className="p-1.5 bg-[#050505] hover:bg-rose-950/60 border border-[#222222] hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
@@ -312,6 +322,42 @@ export default function ProjectDashboard({
               </div>
             );
           })}
+        </div>
+      )}
+      {/* In-UI Delete Confirmation Modal */}
+      {deleteConfirmProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-[#141417] border border-[#26262a] w-full max-w-md rounded-xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center space-x-3 text-rose-400">
+              <div className="p-2.5 bg-rose-500/10 border border-rose-500/30 rounded-lg">
+                <Trash2 className="w-6 h-6 text-rose-500" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white uppercase tracking-wider">Delete Project</h3>
+                <p className="text-xs text-slate-400 font-mono">Permanent removal from Firestore</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Are you sure you want to permanently delete workspace <strong className="text-white">"{deleteConfirmProject.name}"</strong>? All project code, agent history, and deployment links will be purged.
+            </p>
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                onClick={() => setDeleteConfirmProject(null)}
+                disabled={deletingId !== null}
+                className="px-4 py-2 border border-[#333] hover:bg-[#222] text-xs font-bold uppercase tracking-wider text-slate-300 rounded transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                disabled={deletingId !== null}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold uppercase tracking-wider rounded shadow transition flex items-center space-x-1.5 disabled:opacity-50"
+              >
+                {deletingId ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                <span>{deletingId ? 'Deleting...' : 'Yes, Delete Project'}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
