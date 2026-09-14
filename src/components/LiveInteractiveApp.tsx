@@ -58,6 +58,11 @@ export default function LiveInteractiveApp({ project }: LiveInteractiveAppProps)
     promptText.includes('ecommerce') ||
     promptText.includes('cart') ||
     promptText.includes('product');
+  const isRestaurant = /restaurant|dining|culinary|chef|tasting menu|reservation/.test(promptText);
+
+  if (isRestaurant) {
+    return <InteractiveRestaurant appName={project.name} />;
+  }
 
   if (isCalculator) {
     return <InteractiveCalculator appName={project.name} />;
@@ -81,6 +86,30 @@ export default function LiveInteractiveApp({ project }: LiveInteractiveAppProps)
 
   // General dynamic interactive web application
   return <InteractiveDynamicApp project={project} />;
+}
+
+function InteractiveRestaurant({ appName }: { appName: string }) {
+  const [category, setCategory] = useState('All');
+  const [reserved, setReserved] = useState(false);
+  const dishes = [
+    ['Caviar & smoked crème', 'Tasting Menu', '€38'],
+    ['Coal-roasted black cod', 'Mains', '€42'],
+    ['Midnight garden', 'Cocktails', '€18'],
+    ['Valrhona eclipse', 'Desserts', '€16'],
+  ];
+  const visible = category === 'All' ? dishes : dishes.filter((dish) => dish[1] === category);
+  return (
+    <div className="overflow-hidden bg-[#100f0d] text-[#f7f0e4] -m-4 md:-m-6 min-h-[620px] font-serif">
+      <section className="relative min-h-[420px] p-7 md:p-12 flex flex-col justify-end bg-[linear-gradient(115deg,rgba(10,10,9,.95),rgba(61,40,24,.65)),url('https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=1600&q=80')] bg-cover bg-center">
+        <div className="absolute inset-0 bg-amber-900/10 animate-pulse" />
+        <div className="relative flex justify-between items-center text-[10px] tracking-[.24em] uppercase"><b>L'ÉTOILE</b><button onClick={() => document.getElementById('preview-reservation')?.scrollIntoView()} className="border border-amber-200/60 px-3 py-2 hover:bg-amber-100 hover:text-black">Reserve</button></div>
+        <div className="relative mt-auto"><p className="text-[10px] tracking-[.25em] uppercase text-amber-200">Paris · Contemporary tasting</p><h1 className="text-5xl md:text-7xl leading-[.85] mt-3 animate-[pulse_4s_ease-in-out_infinite]">Culinary<br/><i className="text-amber-300">Artistry</i> Redefined</h1><p className="mt-8 text-xs animate-bounce">↓ Scroll to explore</p></div>
+      </section>
+      <section className="p-7 md:p-12 bg-[#ebe0cf] text-[#1a1510]"><p className="text-[10px] tracking-[.24em] text-amber-800">THE CHEF'S STORY</p><h2 className="text-3xl md:text-5xl max-w-3xl mt-3">Memory, fire and the quiet theatre of a perfect service.</h2><div className="grid grid-cols-2 gap-3 mt-7"><img className="h-40 md:h-60 w-full object-cover" src="https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=900&q=80" alt="Fine dining plate"/><img className="h-40 md:h-60 w-full object-cover translate-y-5" src="https://images.unsplash.com/photo-1515003197210-e0cd71810b5f?auto=format&fit=crop&w=900&q=80" alt="Chef plating a dish"/></div></section>
+      <section className="p-7 md:p-12"><p className="text-[10px] tracking-[.24em] text-amber-300">À LA CARTE</p><div className="flex gap-2 flex-wrap my-5">{['All', 'Tasting Menu', 'Mains', 'Cocktails', 'Desserts'].map((item) => <button key={item} onClick={() => setCategory(item)} className={`text-xs border px-3 py-2 transition-all ${category === item ? 'bg-amber-300 text-black border-amber-300' : 'border-amber-100/40 hover:border-amber-200'}`}>{item}</button>)}</div><div>{visible.map(([dish, type, price]) => <div key={dish} className="grid grid-cols-[1fr_auto] border-t border-amber-100/20 py-4 hover:translate-x-1 transition-transform"><div><span className="text-[10px] text-amber-300">{type}</span><h3 className="text-xl">{dish}</h3></div><b>{price}</b></div>)}</div></section>
+      <section id="preview-reservation" className="p-7 md:p-12 text-center bg-[#251a12]"><p className="text-[10px] tracking-[.24em] text-amber-300">RESERVATIONS</p><h2 className="text-4xl mt-2">Join us after dusk.</h2>{reserved ? <p className="mt-5 text-amber-200 animate-pulse">Your table is held. We look forward to welcoming you.</p> : <form onSubmit={(event) => { event.preventDefault(); setReserved(true); }} className="mt-6 grid gap-2 max-w-md mx-auto"><input required aria-label="Name" placeholder="Your name" className="p-3 bg-black/20 border border-amber-100/30"/><input required type="date" aria-label="Date" className="p-3 bg-black/20 border border-amber-100/30"/><button className="bg-amber-300 text-black py-3 font-bold hover:bg-amber-200">Request a table</button></form>}</section>
+    </div>
+  );
 }
 
 // ==========================================

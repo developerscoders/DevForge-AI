@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Agent, SubAgent, Project, TestQualityAudit } from '../types';
 import { ARIA_SYSTEM_INSTRUCTIONS, ARIA_TOOL_DECLARATIONS, FIXED_SWARM_ROSTER } from '../lib/ariaOrchestratorEngine';
+import { AGENT_ROSTER } from '../config/agentRoster';
 import {
   Bot,
   Play,
@@ -35,33 +36,33 @@ import { motion, AnimatePresence } from 'motion/react';
 
 const defaultAgentPrompts: Record<string, { prompt: string; model: string; artifact: string }> = {
   'ag_ceo': {
-    prompt: `[Role: Aria CEO Executive Directive & Orchestration Gate]\nDeconstruct user requirements into 5 structured technical work orders. Route tasks across multi-LLM providers (OpenRouter GPT-4o-mini, NVIDIA NIM LLaMA 3.1 70B, Groq LLaMA 3.3 70B & Mixtral 8x7B). Intercept AST and compiler warnings with autonomous cross-agent self-healing, verify zero OWASP alerts, and sign off for live sandbox container deployment on port 3000.`,
-    model: 'Google Gemini (gemini-2.5-flash / gemini-2.5-pro)',
+    prompt: 'Runtime prompt loaded from agents/aria.md when the milestone is dispatched.',
+    model: `Google Gemini (${AGENT_ROSTER.aria.defaultModel} / ${AGENT_ROSTER.aria.fallbackModels.join(', ')})`,
     artifact: 'Milestone Work Orders, Self-Healing Interventions & Executive Deployment Certificate'
   },
   'ag_pm': {
-    prompt: `[Role: Senior Product Manager via OpenRouter (openai/gpt-4o-mini)]\nSynthesize comprehensive Product Requirements Document (PRD.md). Structure key user personas, core feature matrix, system boundaries, edge-case interaction journeys, and milestone acceptance gates. Instruct subagents Spec Writer & User Flow Synthesizer.`,
-    model: 'OpenRouter (openai/gpt-4o-mini)',
+    prompt: 'Runtime prompt loaded from agents/parker.md when the milestone is dispatched.',
+    model: `OpenRouter (${AGENT_ROSTER.parker.defaultModel})`,
     artifact: 'PRD.md & Full-Stack Requirements Specification'
   },
   'ag_arch': {
-    prompt: `[Role: Senior Solution Architect via OpenRouter (deepseek/deepseek-r1 / openai/gpt-4o-mini)]\nDesign production full-stack system topology. Formulate relational schema (server/schema.sql), TypeScript interfaces (src/types.ts), client API contracts (src/lib/api.ts), and REST API route blueprints. Instruct subagents Data Schema Modeler & API Contract Validator.`,
-    model: 'OpenRouter (deepseek/deepseek-r1)',
+    prompt: 'Runtime prompt loaded from agents/sophia.md when the milestone is dispatched.',
+    model: `OpenRouter (${AGENT_ROSTER.sophia.defaultModel})`,
     artifact: 'architecture.md, server/schema.sql & src/types.ts'
   },
   'ag_fe': {
-    prompt: `[Role: Senior Frontend Lead via NVIDIA NIM (meta/llama-3.1-70b-instruct)]\nSynthesize complete, responsive React 19 single-page UI with Tailwind CSS utility classes and interactive state management (src/App.tsx, src/components/Dashboard.tsx, src/components/Header.tsx). Enforce accessible typography, error boundary guards, and dynamic data binding.`,
-    model: 'NVIDIA NIM (meta/llama-3.1-70b-instruct)',
+    prompt: 'Runtime prompt loaded from agents/frank.md when the milestone is dispatched.',
+    model: `NVIDIA NIM (${AGENT_ROSTER.frank.defaultModel})`,
     artifact: 'React 19 UI Component Tree & Tailwind CSS Layout'
   },
   'ag_qa': {
-    prompt: `[Role: Senior QA Lead via Groq Free Inference (llama-3.3-70b-versatile)]\nFormulate automated unit and integration tests (tests/app.test.ts). Execute zero-trust OWASP Top 10 security audit, boundary condition stress tests, and API contract validation. Enforce 100% green assertion pass rate.`,
-    model: 'Groq Free Inference (llama-3.3-70b-versatile)',
+    prompt: 'Runtime prompt loaded from agents/quinn.md when the milestone is dispatched.',
+    model: `Groq (${AGENT_ROSTER.quinn.defaultModel})`,
     artifact: 'tests/app.test.ts (100% Assertions Green, 0 Security Alerts)'
   },
   'ag_sre': {
-    prompt: `[Role: Senior DevOps & SRE Lead via Groq Free Inference (mixtral-8x7b-32768)]\nSynthesize production multi-stage Dockerfile and docker-compose.yml. Map port 3000 ingress with reverse proxy compatibility, configure self-healing health check daemon, and verify environment variable declarations.`,
-    model: 'Groq Free Inference (mixtral-8x7b-32768)',
+    prompt: 'Runtime prompt loaded from agents/devon.md when the milestone is dispatched.',
+    model: `Groq (${AGENT_ROSTER.devon.defaultModel})`,
     artifact: 'Dockerfile & docker-compose.yml (Port 3000 Ingress)'
   }
 };

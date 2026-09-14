@@ -86,6 +86,7 @@ export interface Project {
   files: FileNode[];
   agents: Agent[];
   createdAt: string;
+  updatedAt?: string;
   aiCreditsUsed: number;
   modelConfig: Record<string, string>; // Role -> Model mapping
   deployedUrl?: string;

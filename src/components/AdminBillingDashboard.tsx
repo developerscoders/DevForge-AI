@@ -39,6 +39,12 @@ import {
   subscribeToAllCMSPages,
   DEFAULT_CMS_PAGES
 } from '../lib/cmsService';
+import {
+  fetchFirestoreAdminAnalytics,
+  fetchFirestoreAdminTenants,
+  fetchFirestoreAdminTransactions,
+  FirestoreAdminAnalytics
+} from '../lib/firestoreService';
 
 interface AdminBillingDashboardProps {
   analytics: any;
@@ -79,7 +85,7 @@ export default function AdminBillingDashboard({
   onUpdatePlan,
   onAddCoupon,
 }: AdminBillingDashboardProps) {
-  const { profile, user, updateUserSubscription } = useAuth();
+  const { profile, user } = useAuth();
   const [activeTab, setActiveTab] = useState<'analytics' | 'tenants' | 'providers' | 'coupons' | 'webhooks' | 'plans' | 'cms'>('analytics');
 
   // CMS & SEO Management
@@ -173,16 +179,31 @@ export default function AdminBillingDashboard({
   const [newTenantEmail, setNewTenantEmail] = useState('');
   const [newTenantName, setNewTenantName] = useState('');
   const [newTenantPlan, setNewTenantPlan] = useState('starter');
+  const [databaseAnalytics, setDatabaseAnalytics] = useState<FirestoreAdminAnalytics | null>(null);
+  const [databaseTransactions, setDatabaseTransactions] = useState<Transaction[]>([]);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
 
   const fetchTenants = async () => {
     try {
-      const res = await fetch('/api/admin/tenants');
-      if (res.ok) {
-        const data = await res.json();
-        setTenantsList(data);
-      }
+      setTenantsList(await fetchFirestoreAdminTenants());
     } catch (e) {
-      console.warn('Could not fetch tenants list', e);
+      setTenantsList([]);
+      setDatabaseError(e instanceof Error ? e.message : 'Could not read Firestore tenant data.');
+    }
+  };
+
+  const fetchDatabaseAnalytics = async () => {
+    try {
+      const [nextAnalytics, nextTransactions] = await Promise.all([
+        fetchFirestoreAdminAnalytics(),
+        fetchFirestoreAdminTransactions()
+      ]);
+      setDatabaseAnalytics(nextAnalytics);
+      setDatabaseTransactions(nextTransactions);
+      setDatabaseError(null);
+    } catch (e) {
+      setDatabaseAnalytics(null);
+      setDatabaseError(e instanceof Error ? e.message : 'Could not read Firestore analytics.');
     }
   };
 
@@ -201,6 +222,7 @@ export default function AdminBillingDashboard({
   useEffect(() => {
     fetchProviders();
     fetchTenants();
+    fetchDatabaseAnalytics();
   }, []);
 
   useEffect(() => {
@@ -239,73 +261,21 @@ export default function AdminBillingDashboard({
   };
 
   const handleUpdateTenantTier = async (newPlanId: string, targetEmail?: string, targetId?: string) => {
-    let name = 'Free Tier';
-    let credits = 500;
-    if (newPlanId === 'starter') { name = 'Starter Plan'; credits = 1000; }
-    if (newPlanId === 'pro') { name = 'Pro Plan'; credits = 5000; }
-    if (newPlanId === 'enterprise') { name = 'Enterprise Plan'; credits = 25000; }
-
-    // 1. Update backend server database
-    try {
-      await fetch('/api/admin/tenants/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: targetId || profile?.uid || user?.uid,
-          email: targetEmail || profile?.email || user?.email || 'developer@devforge.ai',
-          planId: newPlanId,
-          creditsRemaining: credits
-        })
-      });
-      await fetchTenants();
-    } catch (e) {
-      console.warn('Backend tenant update error', e);
-    }
-
-    // 2. Update AuthContext and Firestore
-    await updateUserSubscription(newPlanId, name, 'monthly', credits);
-    setTenantTierSelected(newPlanId);
-    setTenantFeedback(`Tenant tier instantly updated to ${name}!`);
-    setTimeout(() => setTenantFeedback(''), 3000);
+    // Entitlements must be changed by a verified payment/admin backend, never
+    // by browser state or the old in-memory API.
+    setTenantFeedback('Tenant tier changes require a trusted Admin SDK or verified payment webhook. No local or sample data was changed.');
+    setTimeout(() => setTenantFeedback(''), 5000);
   };
 
   const handleAddTenant = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTenantEmail) return;
-    try {
-      const res = await fetch('/api/admin/tenants', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          displayName: newTenantName || newTenantEmail.split('@')[0],
-          email: newTenantEmail,
-          planId: newTenantPlan
-        })
-      });
-      if (res.ok) {
-        setNewTenantEmail('');
-        setNewTenantName('');
-        setIsAddingTenant(false);
-        setTenantFeedback('New tenant created and saved to database!');
-        setTimeout(() => setTenantFeedback(''), 3000);
-        await fetchTenants();
-      }
-    } catch (e) {
-      console.warn('Error adding tenant', e);
-    }
+    setTenantFeedback('Tenants are created by Firebase Authentication. Use an Admin SDK provisioning workflow to assign an initial plan.');
+    setTimeout(() => setTenantFeedback(''), 5000);
   };
 
   const handleDeleteTenant = async (id: string) => {
-    try {
-      const res = await fetch(`/api/admin/tenants/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setTenantFeedback('Tenant deleted from database.');
-        setTimeout(() => setTenantFeedback(''), 3000);
-        await fetchTenants();
-      }
-    } catch (e) {
-      console.warn('Error deleting tenant', e);
-    }
+    setTenantFeedback('Tenant deletion is disabled in the browser. Use Firebase Admin SDK to deactivate an account safely.');
+    setTimeout(() => setTenantFeedback(''), 5000);
   };
 
   const triggerSimulate = async (type: string) => {
@@ -327,10 +297,20 @@ export default function AdminBillingDashboard({
   };
 
   // Dynamic revenue progression strictly from database analytics
-  const chartData = (analytics as any)?.revenueHistory && (analytics as any).revenueHistory.length > 0
-    ? (analytics as any).revenueHistory
+  const liveAnalytics = databaseAnalytics || {
+    monthlyRecurringRevenue: 0,
+    annualRunRate: 0,
+    totalRevenue: 0,
+    activeSubscriptions: 0,
+    activeTenants: 0,
+    globalCreditUsage: 0,
+    revenueHistory: [] as Array<{ month: string; Revenue: number }>
+  };
+  const liveTransactions = databaseAnalytics ? databaseTransactions : [];
+  const chartData = (liveAnalytics as any)?.revenueHistory && (liveAnalytics as any).revenueHistory.length > 0
+    ? (liveAnalytics as any).revenueHistory
     : [
-        { month: 'Current', Revenue: analytics?.totalRevenue || 0 }
+        { month: 'Current', Revenue: liveAnalytics?.totalRevenue || 0 }
       ];
 
   return (
@@ -404,6 +384,12 @@ export default function AdminBillingDashboard({
         </div>
       </header>
 
+      {databaseError && (
+        <div className="border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+          Firestore admin data is unavailable: {databaseError}. No sample tenant or revenue data is shown.
+        </div>
+      )}
+
       {/* 1. ANALYTICS TAB */}
       {activeTab === 'analytics' && (
         <div className="space-y-8">
@@ -413,7 +399,7 @@ export default function AdminBillingDashboard({
               <div>
                 <span className="label text-[9px] text-slate-500">Monthly Rec. Revenue</span>
                 <div className="text-2xl font-black text-white mt-1.5 font-mono">
-                  ${(analytics?.monthlyRecurringRevenue ?? 0).toLocaleString()}
+                  ${(liveAnalytics?.monthlyRecurringRevenue ?? 0).toLocaleString()}
                 </div>
               </div>
               <div className="p-2.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -425,7 +411,7 @@ export default function AdminBillingDashboard({
               <div>
                 <span className="label text-[9px] text-slate-500">Annual Run Rate</span>
                 <div className="text-2xl font-black text-white mt-1.5 font-mono">
-                  ${((analytics as any)?.annualRunRate ?? ((analytics?.monthlyRecurringRevenue ?? 0) * 12)).toLocaleString()}
+                  ${((liveAnalytics as any)?.annualRunRate ?? ((liveAnalytics?.monthlyRecurringRevenue ?? 0) * 12)).toLocaleString()}
                 </div>
               </div>
               <div className="p-2.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
@@ -437,7 +423,7 @@ export default function AdminBillingDashboard({
               <div>
                 <span className="label text-[9px] text-slate-500">Cumulative Earnings</span>
                 <div className="text-2xl font-black text-white mt-1.5 font-mono">
-                  ${(analytics?.totalRevenue ?? 0).toLocaleString()}
+                  ${(liveAnalytics?.totalRevenue ?? 0).toLocaleString()}
                 </div>
               </div>
               <div className="p-2.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
@@ -449,7 +435,7 @@ export default function AdminBillingDashboard({
               <div>
                 <span className="label text-[9px] text-slate-500">Tenant Active Subscriptions</span>
                 <div className="text-2xl font-black text-white mt-1.5 font-mono">
-                  {analytics?.activeSubscriptions ?? 0}
+                  {liveAnalytics?.activeSubscriptions ?? 0}
                 </div>
               </div>
               <div className="p-2.5 bg-violet-500/10 text-violet-400 border border-violet-500/20">
@@ -549,7 +535,7 @@ export default function AdminBillingDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#222222]/50 text-slate-300">
-                  {transactions.map((t) => (
+                  {liveTransactions.map((t) => (
                     <tr key={t.id} className="hover:bg-white/2 transition duration-150">
                       <td className="py-3.5 font-bold text-slate-400 uppercase">{t.id}</td>
                       <td className="py-3.5 uppercase">{t.invoiceNumber}</td>
@@ -635,10 +621,10 @@ export default function AdminBillingDashboard({
                   </span>
                 </div>
                 <div className="text-xs font-mono text-cyan-400 font-bold">
-                  {(profile?.creditsRemaining ?? 500).toLocaleString()} / {(profile?.creditsTotal ?? 500).toLocaleString()} AI Credits
+                  {(profile?.creditsRemaining ?? 0).toLocaleString()} / {(profile?.creditsTotal ?? 0).toLocaleString()} AI Credits
                 </div>
                 <div className="text-[10px] text-slate-500 font-mono">
-                  Renewal: {profile?.nextRenewal || '2026-10-01'}
+                  Renewal: {profile?.nextRenewal || 'Not set'}
                 </div>
               </div>
 
@@ -664,7 +650,7 @@ export default function AdminBillingDashboard({
                     </button>
                   </div>
                   <span className="text-[9px] text-slate-500 font-mono">
-                    Directly synchronizes with AuthContext & Firestore.
+                    Changes are processed only by a trusted backend/webhook.
                   </span>
                 </div>
               </div>
@@ -676,12 +662,7 @@ export default function AdminBillingDashboard({
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
                   Connected Tenant Database Directory ({tenantsList.length})
                 </h3>
-                <button
-                  onClick={() => setIsAddingTenant(!isAddingTenant)}
-                  className="bg-[#18181b] hover:bg-[#27272a] text-slate-200 border border-[#333] text-[10px] uppercase font-bold px-3 py-1.5 transition"
-                >
-                  {isAddingTenant ? 'Cancel' : '+ Add Tenant Record'}
-                </button>
+                <button onClick={fetchTenants} className="bg-[#18181b] hover:bg-[#27272a] text-slate-200 border border-[#333] text-[10px] uppercase font-bold px-3 py-1.5 transition">Refresh from Firestore</button>
               </div>
 
               {/* Add Tenant Form */}
@@ -756,7 +737,7 @@ export default function AdminBillingDashboard({
                         {profile?.planName || 'Free Tier'}
                       </td>
                       <td className="py-3 text-cyan-400 font-bold">
-                        {(profile?.creditsRemaining ?? 500).toLocaleString()}
+                      {(profile?.creditsRemaining ?? 0).toLocaleString()}
                       </td>
                       <td className="py-3">
                         <span className="px-2 py-0.5 text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase">
@@ -796,7 +777,7 @@ export default function AdminBillingDashboard({
                           {t.planName || t.planId || 'Starter Plan'}
                         </td>
                         <td className="py-3 text-slate-300 font-bold">
-                          {(t.creditsRemaining ?? 1000).toLocaleString()}
+                          {(t.creditsRemaining ?? 0).toLocaleString()}
                         </td>
                         <td className="py-3">
                           <span className="px-2 py-0.5 text-[9px] font-bold bg-slate-800 text-slate-400 uppercase">

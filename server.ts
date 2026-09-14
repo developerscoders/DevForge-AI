@@ -6,6 +6,10 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { PaymentProviderRegistry } from './src/lib/payment-abstraction.js';
 import { callMultiProviderLLM, getProviderConfigStatus } from './src/lib/multi-llm-provider.js';
+import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG } from './src/config/agentRoster.js';
+import { buildAgentPrompt } from './src/config/agentPromptRegistry.js';
+import { classifyProjectPrompt } from './src/config/outputContracts.js';
+import { buildMilestoneUserMessage, loadAgentPrompt } from './src/lib/agentPromptLoader.js';
 import { generateFullProjectFiles } from './src/lib/projectFilesGenerator.js';
 import { pushProjectToGitHub, deployProjectToVercel, checkVercelDeploymentStatus, ensureProductionDeployFiles } from './src/lib/deployService.js';
 import {
@@ -25,9 +29,79 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+const allowedOrigins = new Set([
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+]);
+
+// Apply CORS before every API route, including JSON parse failures and OPTIONS
+// preflight requests. This avoids the browser masking API errors as CORS errors.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use(express.json());
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+
+/**
+ * Models occasionally preface an otherwise valid payload with prose or wrap it
+ * in a Markdown code fence. Treat that as an invalid enhancement, not a failed
+ * project generation: the caller can continue with the local scaffold.
+ */
+function parseParkerProjectResponse(text: string): Record<string, any> {
+  const trimmed = text.trim();
+  const fencedJson = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const candidate = (fencedJson || trimmed).trim();
+  const parsed = JSON.parse(candidate);
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('response must be a JSON object');
+  }
+  if (!Array.isArray(parsed.files)) {
+    throw new Error('response is missing a files array');
+  }
+
+  return parsed;
+}
+
+function validateGeneratedProject(data: Record<string, any>): void {
+  const files = data.files as Array<{ path?: string; content?: string }>;
+  const paths = new Set(files.map((file) => file.path));
+  const appFile = files.find((file) => file.path === 'src/App.tsx');
+  const html = files.find((file) => file.path === 'index.html');
+  if (!paths.has('package.json') || !appFile?.content || !html?.content) {
+    throw new Error('response is missing the runnable Vite entry files');
+  }
+  if (!/^\s*<!doctype\s+html/i.test(html.content) || !/<div\s+id=["']root["']/i.test(html.content)) {
+    throw new Error('index.html is not a valid Vite HTML document');
+  }
+  if (/Add Record|Database & CRUD|REST API Tester/i.test(appFile.content) && /restaurant|portfolio|landing page|static site/i.test(data.description || '')) {
+    throw new Error('response substituted a generic dashboard for the requested product');
+  }
+}
+
+/** Local generation is intentionally prompt-aware, never a dashboard-shaped placeholder. */
+function createLocalProjectArtifact(name: string, prompt: string, slug: string) {
+  const files = generateFullProjectFiles(name, prompt, slug).map(({ path, content }: any) => ({ path, content }));
+  return {
+    name,
+    description: prompt.slice(0, 240),
+    prd: `# ${name}\n\n## Source request\n\n${prompt}\n\n## Acceptance gate\n\nThe generated experience must reflect this request, be responsive, and honor reduced-motion preferences.`,
+    architecture: `# Architecture\n\n## Project type\n\nPrompt-classified client application.\n\n## Generated modules\n\n${files.map((file: any) => `- \`${file.path}\``).join('\n')}`,
+    files,
+  };
+}
 
 // Lazy initialize Gemini API Client
 let aiClient: GoogleGenAI | null = null;
@@ -385,29 +459,41 @@ app.get('/api/deploy/config', (req, res) => {
 // 2. Project Creation (Hierarchical Multi-Agent Swarm with CEO Validation & Multi-Model Routing)
 app.post('/api/projects', async (req, res) => {
   const { prompt, modelConfig } = req.body;
-  if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
+  if (typeof prompt !== 'string' || !prompt.trim()) return res.status(400).json({ error: 'Prompt is required' });
+  const generationCreditCost = 350;
+  // This API guard is authoritative for server-backed clients. Never create a
+  // project or start the asynchronous swarm if the account cannot pay for it.
+  if (db.activeSubscription.creditsRemaining < generationCreditCost) {
+    return res.status(402).json({
+      error: 'Insufficient credits to generate a project.',
+      code: 'INSUFFICIENT_CREDITS',
+      requiredCredits: generationCreditCost,
+      creditsRemaining: db.activeSubscription.creditsRemaining,
+      rechargeUrl: '/pricing'
+    });
+  }
+  const fullPrompt = prompt.trim();
+  console.log('[prompt:server-received]', fullPrompt);
+  const projectClassification = classifyProjectPrompt(fullPrompt);
 
   // Generate random id and fully-fledged project files
   const projectId = `proj_${Math.random().toString(36).substring(2, 9)}`;
-  const cleanAppName = (req.body.name || (prompt.length < 32 ? prompt.trim() : prompt.split(/[\n,.]/)[0].trim().slice(0, 32))).replace(/[^a-zA-Z0-9\s-]/g, '').trim() || 'Autonomous Application';
-  const initialFiles = generateFullProjectFiles(cleanAppName, prompt, cleanAppName.toLowerCase().replace(/\s+/g, '-'));
+  // A display name is intentionally separate from fullPrompt. It must never enter model input.
+  const requestedName = typeof req.body.name === 'string' ? req.body.name : '';
+  const cleanAppName = (requestedName || fullPrompt.split(/[\n,.]/, 1)[0].slice(0, 64)).replace(/[^a-zA-Z0-9\s-]/g, '').trim() || 'Autonomous Application';
+  // Files stay empty until the pipeline has produced and validated the final artifact.
+  const initialFiles: any[] = [];
 
   const initialProject = {
     id: projectId,
     name: cleanAppName,
-    description: prompt.slice(0, 180),
-    prompt,
-    status: 'deployed' as const,
+    description: fullPrompt.slice(0, 180),
+    prompt: fullPrompt,
+    projectClassification,
+    status: 'generating' as const,
     createdAt: new Date().toISOString(),
     aiCreditsUsed: 350,
-    modelConfig: modelConfig || {
-      'CEO Orchestrator': 'gemini-2.5-flash',
-      'Product Manager': 'openai/gpt-4o-mini',
-      'Solution Architect': 'openai/gpt-4o-mini',
-      'Frontend Engineer': 'meta/llama-3.1-70b-instruct',
-      'QA/Test Engineer': 'llama-3.3-70b-versatile',
-      'DevOps Engineer': 'mixtral-8x7b-32768',
-    },
+    modelConfig: modelConfig || DEFAULT_MODEL_CONFIG,
     files: initialFiles,
     deployedUrl: `/preview/${projectId}`,
     agents: [
@@ -419,7 +505,7 @@ app.post('/api/projects', async (req, res) => {
         provider: 'gemini' as const,
         status: 'thinking' as const,
         avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=80&fit=crop&q=60',
-        model: 'gemini-2.5-flash',
+        model: AGENT_ROSTER.aria.defaultModel,
         currentTask: 'Deconstructing intent and setting milestone directives for Senior Leads',
         validationStatus: 'in_review' as const,
         ceoDirectives: [
@@ -437,12 +523,12 @@ app.post('/api/projects', async (req, res) => {
         provider: 'openrouter' as const,
         status: 'idle' as const,
         avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=80&fit=crop&q=60',
-        model: 'meta-llama/llama-3.3-70b-instruct:free',
+        model: AGENT_ROSTER.parker.defaultModel,
         currentTask: 'Standing by for CEO directive on PRD scoping',
         validationStatus: 'pending' as const,
         subagents: [
-          { id: `sub_pm_1_${projectId}`, name: 'Spec Writer', role: 'PRD Modeler', task: 'Synthesizing feature matrix & core entities', status: 'idle' as const, instructionsReceived: [], model: 'meta-llama/llama-3.3-70b-instruct:free' },
-          { id: `sub_pm_2_${projectId}`, name: 'User Flow Synthesizer', role: 'UX Analyst', task: 'Modeling edge-case user actions & workflows', status: 'idle' as const, instructionsReceived: [], model: 'meta-llama/llama-3.3-70b-instruct:free' }
+          { id: `sub_pm_1_${projectId}`, name: 'Spec Writer', role: 'PRD Modeler', task: 'Synthesizing feature matrix & core entities', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.parker.defaultModel },
+          { id: `sub_pm_2_${projectId}`, name: 'User Flow Synthesizer', role: 'UX Analyst', task: 'Modeling edge-case user actions & workflows', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.parker.defaultModel }
         ],
         outputLogs: []
       },
@@ -454,12 +540,12 @@ app.post('/api/projects', async (req, res) => {
         provider: 'openrouter' as const,
         status: 'idle' as const,
         avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=80&fit=crop&q=60',
-        model: 'deepseek/deepseek-r1:free',
+        model: AGENT_ROSTER.sophia.defaultModel,
         currentTask: 'Standing by for PRD validation from CEO',
         validationStatus: 'pending' as const,
         subagents: [
-          { id: `sub_arch_1_${projectId}`, name: 'Data Schema Modeler', role: 'DB Architect', task: 'Drafting strict TypeScript interfaces & database schemas', status: 'idle' as const, instructionsReceived: [], model: 'deepseek/deepseek-r1:free' },
-          { id: `sub_arch_2_${projectId}`, name: 'API Contract Validator', role: 'API Architect', task: 'Verifying REST routes & security middleware', status: 'idle' as const, instructionsReceived: [], model: 'deepseek/deepseek-chat:free' }
+          { id: `sub_arch_1_${projectId}`, name: 'Data Schema Modeler', role: 'DB Architect', task: 'Drafting strict TypeScript interfaces & database schemas', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.sophia.defaultModel },
+          { id: `sub_arch_2_${projectId}`, name: 'API Contract Validator', role: 'API Architect', task: 'Verifying REST routes & security middleware', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.sophia.defaultModel }
         ],
         outputLogs: []
       },
@@ -471,12 +557,12 @@ app.post('/api/projects', async (req, res) => {
         provider: 'nvidia' as const,
         status: 'idle' as const,
         avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=80&fit=crop&q=60',
-        model: 'meta/llama-3.1-70b-instruct',
+        model: AGENT_ROSTER.frank.defaultModel,
         currentTask: 'Standing by for Architecture approval',
         validationStatus: 'pending' as const,
         subagents: [
-          { id: `sub_fe_1_${projectId}`, name: 'Component Tree Builder', role: 'React Developer', task: 'Synthesizing responsive Tailwind components', status: 'idle' as const, instructionsReceived: [], model: 'meta/llama-3.1-70b-instruct' },
-          { id: `sub_fe_2_${projectId}`, name: 'Interactive State Polisher', role: 'UI Engineer', task: 'Binding interactive state hooks & animations', status: 'idle' as const, instructionsReceived: [], model: 'meta/llama-3.1-70b-instruct' }
+          { id: `sub_fe_1_${projectId}`, name: 'Component Tree Builder', role: 'React Developer', task: 'Synthesizing responsive Tailwind components', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.frank.defaultModel },
+          { id: `sub_fe_2_${projectId}`, name: 'Interactive State Polisher', role: 'UI Engineer', task: 'Binding interactive state hooks & animations', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.frank.defaultModel }
         ],
         outputLogs: []
       },
@@ -488,12 +574,12 @@ app.post('/api/projects', async (req, res) => {
         provider: 'groq' as const,
         status: 'idle' as const,
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&fit=crop&q=60',
-        model: 'llama-3.3-70b-versatile',
+        model: AGENT_ROSTER.quinn.defaultModel,
         currentTask: 'Standing by for code synthesis',
         validationStatus: 'pending' as const,
         subagents: [
-          { id: `sub_qa_1_${projectId}`, name: 'Unit Test Runner', role: 'Test Engineer', task: 'Running unit test assertions & regression probes', status: 'idle' as const, instructionsReceived: [], model: 'llama-3.3-70b-versatile' },
-          { id: `sub_qa_2_${projectId}`, name: 'Integration & Edge Verifier', role: 'Security Auditor', task: 'Auditing OWASP Top 10 rules & input boundaries', status: 'idle' as const, instructionsReceived: [], model: 'llama-3.3-70b-versatile' }
+          { id: `sub_qa_1_${projectId}`, name: 'Unit Test Runner', role: 'Test Engineer', task: 'Running unit test assertions & regression probes', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.quinn.defaultModel },
+          { id: `sub_qa_2_${projectId}`, name: 'Integration & Edge Verifier', role: 'Security Auditor', task: 'Auditing OWASP Top 10 rules & input boundaries', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.quinn.defaultModel }
         ],
         outputLogs: []
       },
@@ -505,12 +591,12 @@ app.post('/api/projects', async (req, res) => {
         provider: 'groq' as const,
         status: 'idle' as const,
         avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=80&fit=crop&q=60',
-        model: 'mixtral-8x7b-32768',
+        model: AGENT_ROSTER.devon.defaultModel,
         currentTask: 'Standing by for QA pass',
         validationStatus: 'pending' as const,
         subagents: [
-          { id: `sub_sre_1_${projectId}`, name: 'Docker Container Builder', role: 'DevOps Engineer', task: 'Building multi-stage container & mapping port 3000', status: 'idle' as const, instructionsReceived: [], model: 'mixtral-8x7b-32768' },
-          { id: `sub_sre_2_${projectId}`, name: 'Ingress & Self-Healing Daemon', role: 'SRE Specialist', task: 'Configuring health probes & auto-recovery hooks', status: 'idle' as const, instructionsReceived: [], model: 'mixtral-8x7b-32768' }
+          { id: `sub_sre_1_${projectId}`, name: 'Docker Container Builder', role: 'DevOps Engineer', task: 'Building multi-stage container & mapping port 3000', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.devon.defaultModel },
+          { id: `sub_sre_2_${projectId}`, name: 'Ingress & Self-Healing Daemon', role: 'SRE Specialist', task: 'Configuring health probes & auto-recovery hooks', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.devon.defaultModel }
         ],
         outputLogs: []
       }
@@ -519,7 +605,7 @@ app.post('/api/projects', async (req, res) => {
   };
 
   db.projects.push(initialProject);
-  db.activeSubscription.creditsRemaining = Math.max(0, db.activeSubscription.creditsRemaining - 350);
+  db.activeSubscription.creditsRemaining -= generationCreditCost;
 
   // Send back full initial project so client can immediately render and persist to Firestore
   res.json(initialProject);
@@ -556,7 +642,7 @@ app.post('/api/projects', async (req, res) => {
   (async () => {
     try {
       // 1. CEO Strategic Planning & Delegation
-      pushLog('Aria CEO', `[CEO Directive] Received prompt: "${prompt}". Deconstructing user intent into work orders.`, 'info');
+      pushLog('Aria CEO', `[CEO Directive] Received full prompt: "${fullPrompt}". Deconstructing user intent into work orders.`, 'info');
       await new Promise(r => setTimeout(r, 900));
 
       pushLog('Aria CEO', '[CEO Directive] Assigning Milestone 1 (Product Requirements) to Senior PM Parker Lead.', 'info');
@@ -565,15 +651,15 @@ app.post('/api/projects', async (req, res) => {
       if (proj) {
         const ceoAg = proj.agents.find(a => a.id === 'ag_ceo');
         if (ceoAg) {
-          ceoAg.assignedPrompt = `[Role: Aria CEO Executive Directive]\nDeconstruct user prompt "${prompt}" into 5 core technical work orders with architecture boundaries, schema validations, and security gates.`;
-          ceoAg.modelUsed = 'Google Gemini (gemini-2.5-flash)';
+          ceoAg.assignedPrompt = buildAgentPrompt('aria', fullPrompt, 'Classify the project, then deconstruct it into five technical work orders with architecture boundaries, schema validation, and security gates.', projectClassification);
+          ceoAg.modelUsed = `Google Gemini (${AGENT_ROSTER.aria.defaultModel})`;
           ceoAg.generatedArtifact = 'Milestone Work Orders & Execution Roadmap';
         }
         const pmAgent = proj.agents.find(a => a.id === 'ag_pm');
         if (pmAgent) {
           pmAgent.status = 'active';
-          pmAgent.assignedPrompt = `[Role: Senior Product Manager via OpenRouter (openai/gpt-4o-mini)]\nSynthesize comprehensive Product Requirements Document (PRD), personas, user journey flows, and milestone acceptance criteria for: "${prompt}".`;
-          pmAgent.modelUsed = 'OpenRouter (openai/gpt-4o-mini)';
+          pmAgent.assignedPrompt = buildAgentPrompt('parker', fullPrompt, 'Synthesize the PRD, personas, user journeys, and milestone acceptance criteria.', projectClassification);
+          pmAgent.modelUsed = `OpenRouter (${AGENT_ROSTER.parker.defaultModel})`;
           if (pmAgent.subagents) {
             pmAgent.subagents[0].status = 'active';
             pmAgent.subagents[0].instructionsReceived.push(`Structure full PRD requirements for: ${prompt}`);
@@ -582,25 +668,28 @@ app.post('/api/projects', async (req, res) => {
       }
 
       // 2. Senior PM Execution (OpenRouter Free Tier / Gemini Core)
-      pushLog('Parker Lead', 'Instructing subagents (Spec Writer & User Flow Synthesizer) via OpenRouter Free Tier (Llama 3.3 70B Free)...', 'info');
+      pushLog('Parker Lead', `Instructing subagents (Spec Writer & User Flow Synthesizer) via OpenRouter (${AGENT_ROSTER.parker.defaultModel})...`, 'info');
       await new Promise(r => setTimeout(r, 900));
       
-      const words = prompt.trim().split(' ').slice(0, 4).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-      const appTitle = words || 'Full-Stack Application';
-      const cleanAppName = appTitle.toLowerCase().replace(/[^a-z0-9]/g, '-');
+      console.log('[prompt:parker-request]', fullPrompt);
+      console.log('[project:classification]', JSON.stringify(projectClassification));
+      const appTitle = initialProject.name;
+      const generatedSlug = appTitle.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
       // Call Multi-Model LLM for project generation
       let generatedData: any = null;
+      let rawParkerOutput = '';
 
       try {
         const pmResult = await callMultiProviderLLM({
           provider: 'openrouter',
-          model: 'meta-llama/llama-3.3-70b-instruct:free',
-          prompt: `You are an elite Lead Software Architect. Generate a complete, production-grade FULL-STACK web application for this prompt: "${prompt}".
+          model: AGENT_ROSTER.parker.defaultModel,
+          systemInstruction: loadAgentPrompt('parker'),
+          prompt: buildMilestoneUserMessage(fullPrompt, { ...projectClassification, task: `Generate a complete, production-grade project appropriate for the classified project type.
 Return a strict JSON object with this shape:
 {
   "name": "${appTitle}",
-  "description": "A comprehensive full-stack solution for ${prompt}",
+  "description": "A comprehensive solution for ${fullPrompt}",
   "prd": "markdown product requirement document",
   "architecture": "markdown full-stack system architecture with DB schema and REST API specs",
   "files": [
@@ -618,28 +707,41 @@ Return a strict JSON object with this shape:
     { "path": "Dockerfile", "content": "Multi-stage Dockerfile" },
     { "path": "docker-compose.yml", "content": "Compose configuration" }
   ]
-}`,
+}` }),
           maxTokens: 2048
         });
+        rawParkerOutput = pmResult.text || '';
 
         if (pmResult.text) {
-          let cleaned = pmResult.text.trim();
-          if (cleaned.startsWith('```json')) cleaned = cleaned.substring(7);
-          if (cleaned.startsWith('```')) cleaned = cleaned.substring(3);
-          if (cleaned.endsWith('```')) cleaned = cleaned.substring(0, cleaned.length - 3);
-          cleaned = cleaned.trim();
-          generatedData = JSON.parse(cleaned);
+          generatedData = parseParkerProjectResponse(pmResult.text);
+          validateGeneratedProject(generatedData);
           pushLog('Parker Lead', `PRD & Full-Stack architecture synthesized via ${pmResult.provider} (${pmResult.model}).`, 'success');
           if (proj) {
             const pmAg = proj.agents.find(a => a.id === 'ag_pm');
             if (pmAg) {
               pmAg.generatedArtifact = 'PRD.md & Full-Stack Feature Matrix';
               pmAg.modelUsed = `${pmResult.provider} (${pmResult.model})`;
+              pmAg.rawOutput = pmResult.text;
             }
           }
         }
       } catch (err: any) {
-        console.warn('Multi-LLM parse warning, falling back to high-fidelity full-stack synthesizer:', err.message);
+        const reason = `Parker returned a non-conforming response (${err.message}); continuing with the local project scaffold.`;
+        console.warn(reason);
+        pushLog('Parker Lead', reason, 'warning');
+        if (proj) {
+          const pmAg = proj.agents.find(a => a.id === 'ag_pm');
+          if (pmAg) pmAg.rawOutput = rawParkerOutput;
+          delete proj.generationError;
+        }
+      }
+
+      // A provider response is an enhancement, not permission to replace the
+      // requested product with a generic dashboard. When it is missing or
+      // invalid, synthesize a deterministic, prompt-specific project instead.
+      if (!generatedData || !Array.isArray(generatedData.files) || generatedData.files.length < 3) {
+        generatedData = createLocalProjectArtifact(appTitle, fullPrompt, generatedSlug);
+        pushLog('Parker Lead', 'Using the prompt-aware local implementation after provider output failed validation.', 'warning');
       }
 
       // Dynamic High-Fidelity Full-Stack Synthesizer (Ensures 100% reliable full-stack output)
@@ -1301,8 +1403,8 @@ export const dbRepository = {
         const archAg = targetProj.agents.find(a => a.id === 'ag_arch');
         if (archAg) {
           archAg.status = 'active';
-          archAg.assignedPrompt = `[Role: Solution Architect via OpenRouter (deepseek/deepseek-r1 / openai/gpt-4o-mini)]\nDesign full-stack system topology for: "${prompt}". Generate relational PostgreSQL/SQLite schema (server/schema.sql), TypeScript interfaces (src/types.ts), and REST API route specifications.`;
-          archAg.modelUsed = 'OpenRouter (deepseek/deepseek-r1)';
+          archAg.assignedPrompt = buildAgentPrompt('sophia', fullPrompt, 'Design topology, schema, interfaces, and REST specifications.', projectClassification);
+          archAg.modelUsed = `OpenRouter (${AGENT_ROSTER.sophia.defaultModel})`;
           archAg.generatedArtifact = 'architecture.md & server/schema.sql';
         }
       }
@@ -1320,28 +1422,21 @@ export const dbRepository = {
         const feAg = targetProj.agents.find(a => a.id === 'ag_fe');
         if (feAg) {
           feAg.status = 'active';
-          feAg.assignedPrompt = `[Role: Senior Frontend Lead via NVIDIA NIM (meta/llama-3.1-70b-instruct)]\nSynthesize production-ready React 19 UI with Tailwind CSS and full interactivity for: "${prompt}". Files: src/App.tsx, src/components/Dashboard.tsx, src/components/Header.tsx, src/lib/api.ts.`;
-          feAg.modelUsed = 'NVIDIA NIM (meta/llama-3.1-70b-instruct)';
+          feAg.assignedPrompt = buildAgentPrompt('frank', fullPrompt, 'Synthesize type-appropriate UI/components against Sophia’s contracts.', projectClassification);
+          feAg.modelUsed = `NVIDIA NIM (${AGENT_ROSTER.frank.defaultModel})`;
           feAg.generatedArtifact = 'React 19 Component Tree & Tailwind UI';
         }
       }
       pushLog('Frank Lead', 'Instructing subagent Component Tree Builder (running NVIDIA LLaMA 3.1 70B)...', 'info');
       await new Promise(r => setTimeout(r, 1000));
 
-      // 7. Interactive Cross-Agent Assistance & Self-Healing Execution
-      pushLog('Frank Lead', '[Subagent Alert] Subagent Component Tree Builder flagged a state synchronization boundary warning in App.tsx.', 'warning');
-      await new Promise(r => setTimeout(r, 1100));
+      // 7. The source artifact is checked in the final gate; do not invent
+      // subagent defects or claim a repair that did not happen.
+      pushLog('Frank Lead', 'Component boundaries prepared for artifact validation.', 'info');
+      await new Promise(r => setTimeout(r, 700));
 
-      pushLog('Aria CEO', '[CEO Self-Healing Intervention] Intercepted subagent warning. Diagnosed root cause: missing default prop & defensive state handler. Dispatching corrective instructions...', 'warning');
-      await new Promise(r => setTimeout(r, 1200));
-
-      pushLog('Frank Lead', '[Senior Lead Guidance] Subagent Component Tree Builder: Apply immutable state setter and inject optional chaining.', 'info');
-      await new Promise(r => setTimeout(r, 1000));
-
-      pushLog('Frank Lead', '[Self-Healing Success] Subagent applied corrective patch. Component tree fully compiled and styled in Tailwind CSS!', 'success');
-
-      // 8. CEO Validation of Healed Code
-      pushLog('Aria CEO', '[CEO Validation] Re-inspected healed source code. Syntax & JSX integrity 100% verified -> CODE APPROVED.', 'success');
+      // 8. CEO validation is only recorded after the artifact is installed.
+      pushLog('Aria CEO', '[CEO Validation] Source artifact queued for static and test-quality validation.', 'info');
       await new Promise(r => setTimeout(r, 800));
 
       // Update project files in DB
@@ -1351,8 +1446,8 @@ export const dbRepository = {
         targetProject.description = generatedData.description;
         targetProject.status = 'coding';
         targetProject.files = [
-          { path: 'PRD.md', name: 'PRD.md', type: 'file', content: generatedData.prd },
-          { path: 'architecture.md', name: 'architecture.md', type: 'file', content: generatedData.architecture },
+          { path: 'docs/PRD.md', name: 'PRD.md', type: 'file', content: generatedData.prd },
+          { path: 'docs/ARCHITECTURE.md', name: 'ARCHITECTURE.md', type: 'file', content: generatedData.architecture },
           ...generatedData.files.map((f: any) => ({
             path: f.path,
             name: f.path.split('/').pop() || f.path,
@@ -1369,8 +1464,8 @@ export const dbRepository = {
         const qaAg = targetProject.agents.find(a => a.id === 'ag_qa');
         if (qaAg) {
           qaAg.status = 'active';
-          qaAg.assignedPrompt = `[Role: Senior QA Lead via Groq (llama-3.3-70b-versatile)]\nWrite tests/app.test.ts against Frank and Sophia's actual deliverables. Exercise real endpoints, auth flows, data mutations (POST/DELETE), and transaction logic. Enforce 100% green assertions and zero security warnings for: "${prompt}".`;
-          qaAg.modelUsed = 'Groq (llama-3.3-70b-versatile)';
+          qaAg.assignedPrompt = buildAgentPrompt('quinn', fullPrompt, 'Write and run type-appropriate tests against actual deliverables.', projectClassification);
+          qaAg.modelUsed = `Groq (${AGENT_ROSTER.quinn.defaultModel})`;
           qaAg.generatedArtifact = 'tests/app.test.ts (Comprehensive Quality & Security Suite)';
         }
       }
@@ -1472,8 +1567,8 @@ describe('${appTitle} - Complete Test & Quality Suite', () => {
         const sreAg = targetProject.agents.find(a => a.id === 'ag_sre');
         if (sreAg) {
           sreAg.status = 'active';
-          sreAg.assignedPrompt = `[Role: Senior DevOps Lead via Groq (mixtral-8x7b-32768)]\nSynthesize multi-stage Dockerfile and docker-compose.yml for: "${prompt}". Configure port 3000 ingress and self-healing health daemon.`;
-          sreAg.modelUsed = 'Groq (mixtral-8x7b-32768)';
+          sreAg.assignedPrompt = buildAgentPrompt('devon', fullPrompt, 'Synthesize type-appropriate deployment configuration and bounded health recovery.', projectClassification);
+          sreAg.modelUsed = `Groq (${AGENT_ROSTER.devon.defaultModel})`;
           sreAg.generatedArtifact = 'Dockerfile & docker-compose.yml (Port 3000 mapped)';
         }
       }
@@ -1516,7 +1611,7 @@ describe('${appTitle} - Complete Test & Quality Suite', () => {
           }
         }
 
-        pushLog('Aria CEO', '[CEO Final Gate — Step 1 PASSED] AST parsing verified, 0 broken references, 0 OWASP alerts, Port 3000 ingress confirmed.', 'success');
+        pushLog('Aria CEO', `[CEO Final Gate — Step 1 PASSED] Static artifact checks verified: 0 broken references, 0 OWASP alerts${astResult.port3000Configured ? ', server ingress configured.' : ', static-site deployment requires no application port.'}`, 'success');
         writeSwarmState(projectId);
         await new Promise(r => setTimeout(r, 800));
 
@@ -1928,12 +2023,14 @@ app.get('/api/agents/providers/status', (req, res) => {
     timestamp: new Date().toISOString(),
     providers: status,
     agents: [
-      { id: 'aria-ceo', name: 'Aria CEO', role: 'Executive Synthesis & Cross-Heal', provider: 'Google Gemini', model: 'gemini-2.5-flash', configured: status.gemini.configured },
-      { id: 'parker-pm', name: 'Parker Lead', role: 'Strategic PRD & Spec Matrix', provider: 'OpenRouter Free', model: 'meta-llama/llama-3.3-70b-instruct:free', configured: status.openrouter.configured },
-      { id: 'sophia-arch', name: 'Sophia Lead', role: 'System Architecture & Contracts', provider: 'OpenRouter Free', model: 'deepseek/deepseek-r1:free', configured: status.openrouter.configured },
-      { id: 'frank-ui', name: 'Frank Lead', role: 'React UI Component Tree', provider: 'NVIDIA NIM', model: 'meta/llama-3.1-70b-instruct', configured: status.nvidia.configured },
-      { id: 'quinn-qa', name: 'Quinn Lead', role: 'QA & Security Verification', provider: 'Groq Free Inference', model: 'llama-3.3-70b-versatile', configured: status.groq.configured },
-      { id: 'devon-devops', name: 'Devon Lead', role: 'Docker Containerization & Ingress', provider: 'Groq Free Inference', model: 'mixtral-8x7b-32768', configured: status.groq.configured },
+      ...Object.values(AGENT_ROSTER).map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        role: agent.role,
+        provider: agent.provider,
+        model: agent.defaultModel,
+        configured: status[agent.provider].configured,
+      })),
     ]
   });
 });

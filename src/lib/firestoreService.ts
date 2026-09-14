@@ -24,6 +24,82 @@ import {
   BlueprintTemplate
 } from '../types';
 
+export interface FirestoreTenant {
+  id: string;
+  displayName: string;
+  email: string;
+  planId: string;
+  planName: string;
+  creditsRemaining: number;
+  creditsTotal: number;
+  status: string;
+}
+
+export interface FirestoreAdminAnalytics {
+  monthlyRecurringRevenue: number;
+  annualRunRate: number;
+  totalRevenue: number;
+  activeSubscriptions: number;
+  activeTenants: number;
+  globalCreditUsage: number;
+  revenueHistory: Array<{ month: string; Revenue: number }>;
+}
+
+async function assertFirestoreAdmin(): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error('Authentication is required.');
+  const token = await currentUser.getIdTokenResult();
+  if (token.claims.admin !== true) throw new Error('Administrator access is required.');
+}
+
+/** Reads tenant directory data from Firestore; never returns credentials or tokens. */
+export const fetchFirestoreAdminTenants = async (): Promise<FirestoreTenant[]> => {
+  await assertFirestoreAdmin();
+  const snap = await getDocs(collection(db, 'users'));
+  return snap.docs.map((item) => {
+    const data = item.data();
+    return {
+      id: item.id,
+      displayName: data.displayName || 'Unnamed user',
+      email: data.email || '',
+      planId: data.planId || 'free',
+      planName: data.planName || 'Free Tier',
+      creditsRemaining: Number(data.creditsRemaining || 0),
+      creditsTotal: Number(data.creditsTotal || 0),
+      status: data.status || 'active',
+    };
+  });
+};
+
+/** Derives SRE analytics from Firestore entitlements and completed transactions. */
+export const fetchFirestoreAdminAnalytics = async (): Promise<FirestoreAdminAnalytics> => {
+  const tenants = await fetchFirestoreAdminTenants();
+  const transactionSnap = await getDocs(collection(db, 'transactions'));
+  const transactions = transactionSnap.docs.map((item) => item.data());
+  const completed = transactions.filter((transaction) => transaction.status === 'success');
+  const totalRevenue = completed.reduce((sum, transaction) => sum + Number(transaction.totalAmount ?? transaction.amount ?? 0), 0);
+  const monthlyRecurringRevenue = tenants.reduce((sum, tenant) => sum + ({ starter: 49, pro: 99, enterprise: 299 }[tenant.planId] || 0), 0);
+  const creditsTotal = tenants.reduce((sum, tenant) => sum + tenant.creditsTotal, 0);
+  const creditsRemaining = tenants.reduce((sum, tenant) => sum + tenant.creditsRemaining, 0);
+  return {
+    monthlyRecurringRevenue,
+    annualRunRate: monthlyRecurringRevenue * 12,
+    totalRevenue,
+    activeSubscriptions: tenants.filter((tenant) => tenant.planId !== 'free' && tenant.status === 'active').length,
+    activeTenants: tenants.filter((tenant) => tenant.status === 'active').length,
+    globalCreditUsage: Math.max(0, creditsTotal - creditsRemaining),
+    revenueHistory: [{ month: 'Current', Revenue: totalRevenue }],
+  };
+};
+
+export const fetchFirestoreAdminTransactions = async (): Promise<Transaction[]> => {
+  await assertFirestoreAdmin();
+  const snap = await getDocs(collection(db, 'transactions'));
+  return snap.docs
+    .map((item) => ({ id: item.id, ...item.data() } as Transaction))
+    .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+};
+
 // Default initial plans
 export const DEFAULT_PLANS: SubscriptionPlan[] = [
   {
@@ -276,6 +352,25 @@ export const updateFirestoreProjectDetails = async (
     await updateDoc(docRef, { ...updates, updatedAt: new Date().toISOString() });
   } catch (e) {
     console.warn('Error updating project details in Firestore:', e);
+  }
+};
+
+/** An audit record only: exported source remains in the owned project document. */
+export const recordFirestoreProjectExport = async (project: Project, format: 'zip' | 'json') => {
+  try {
+    const currentUid = auth.currentUser?.uid;
+    if (!currentUid) return;
+    const exportId = `exp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await setDoc(doc(db, 'projects', project.id, 'exports', exportId), {
+      id: exportId,
+      projectId: project.id,
+      userId: currentUid,
+      format,
+      fileCount: project.files?.length || 0,
+      exportedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn('Error recording project export in Firestore:', e);
   }
 };
 

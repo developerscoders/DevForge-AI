@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { DEFAULT_MODEL_CONFIG } from '../config/agentRoster';
 import { useLocation } from 'react-router-dom';
 import { Sparkles, Mic, MicOff, BrainCircuit, ArrowRight, Zap, Coins, Clock, HelpCircle, HardDrive, Lock, ShieldCheck } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -27,14 +28,7 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
   }, [location.state]);
 
   // Model Routing options matching requested multi-provider architecture
-  const [modelConfig, setModelConfig] = useState<Record<string, string>>({
-    'CEO Orchestrator': 'gemini-2.5-flash',
-    'Product Manager': 'openai/gpt-4o-mini',
-    'Solution Architect': 'deepseek/deepseek-r1',
-    'Frontend Engineer': 'meta/llama-3.1-70b-instruct',
-    'QA/Test Engineer': 'llama-3.3-70b-versatile',
-    'DevOps Engineer': 'mixtral-8x7b-32768',
-  });
+  const [modelConfig, setModelConfig] = useState<Record<string, string>>({ ...DEFAULT_MODEL_CONFIG });
 
   // Memory RAG settings
   const [ragMemory, setRagMemory] = useState(true);
@@ -328,7 +322,9 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
                     setShowAuthModal(true);
                     return;
                   }
-                  onSubmit(prompt || presets[0].prompt, modelConfig);
+                  const submittedPrompt = prompt || presets[0].prompt;
+                  console.log('[prompt:ui-submitted]', submittedPrompt);
+                  onSubmit(submittedPrompt, modelConfig);
                 }}
                 className="bg-white hover:bg-violet-400 text-black text-xs font-bold uppercase tracking-widest px-6 py-2.5 transition-colors duration-200 flex items-center space-x-2 shadow-lg"
                 id="forge-btn"

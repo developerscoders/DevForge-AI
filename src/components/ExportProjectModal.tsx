@@ -14,6 +14,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import JSZip from 'jszip';
+import { recordFirestoreProjectExport } from '../lib/firestoreService';
 
 interface ExportProjectModalProps {
   project: Project;
@@ -116,6 +117,7 @@ export default function ExportProjectModal({ project, isOpen, onClose }: ExportP
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      await recordFirestoreProjectExport(project, 'zip');
 
       setZipSuccess(true);
       setTimeout(() => setZipSuccess(false), 4000);
@@ -153,6 +155,7 @@ export default function ExportProjectModal({ project, isOpen, onClose }: ExportP
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+    void recordFirestoreProjectExport(project, 'json');
   };
 
   const cliCloneSnippet = `# Clone directly into your local machine

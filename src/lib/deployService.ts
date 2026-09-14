@@ -224,17 +224,29 @@ export async function validateVercelToken(token: string): Promise<{ valid: boole
 export function ensureProductionDeployFiles(files: FileNode[], appName?: string): FileNode[] {
   const result = files.map((f) => ({ ...f }));
 
-  // 1. Ensure index.html includes Tailwind CSS CDN for 100% fail-safe styling in all edge environments
+  // 1. Normalize the document before any enrichment. LLM responses sometimes
+  // escape markup (\<html>) or omit <head>, both of which Vite rejects.
   const indexHtml = result.find((f) => f.path === 'index.html' || f.path === '/index.html');
   if (indexHtml && indexHtml.content) {
+    let html = indexHtml.content.replace(/\\</g, '<').replace(/\\>/g, '>').trim();
+    const documentStart = html.search(/<!doctype\s+html/i);
+    if (documentStart > 0) html = html.slice(documentStart);
+    if (!/^<!doctype\s+html/i.test(html) || !/<html[\s>]/i.test(html) || !/<body[\s>]/i.test(html)) {
+      const appScript = html.match(/<script[^>]+type=["']module["'][^>]+src=["']([^"']+)["'][^>]*><\/script>/i)?.[0]
+        || '<script type="module" src="/src/main.tsx"></script>';
+      html = `<!doctype html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>${appName || 'DevForge App'}</title></head><body><div id="root"></div>${appScript}</body></html>`;
+    }
+    if (!/<head[\s>]/i.test(html)) html = html.replace(/<html([^>]*)>/i, '<html$1><head></head>');
+    indexHtml.content = html;
+
+    // Tailwind CDN is optional for generated projects; when requested, put it
+    // inside <head>, never before the doctype.
     if (!indexHtml.content.includes('cdn.tailwindcss.com')) {
       if (indexHtml.content.includes('</head>')) {
         indexHtml.content = indexHtml.content.replace(
           '</head>',
           '  <!-- Instant Tailwind CSS Engine via CDN: Guarantees 100% full styling on Vercel, Netlify, and static edge -->\n    <script src="https://cdn.tailwindcss.com"></script>\n  </head>'
         );
-      } else {
-        indexHtml.content = `<script src="https://cdn.tailwindcss.com"></script>\n` + indexHtml.content;
       }
     }
   }

@@ -61,6 +61,7 @@ function AppContent() {
     totalRevenue: 0,
     activeSubscriptions: 1,
   });
+  const [creditNotice, setCreditNotice] = useState<string | null>(null);
 
   // Dynamic user subscription derived from profile or fallback
   const activeSub = {
@@ -137,12 +138,28 @@ function AppContent() {
   // 1. Submit New Project Trigger
   const handleForgeProject = async (promptText: string, modelConfig: Record<string, string>) => {
     try {
+      const generationCreditCost = 350;
+      if (activeSub.creditsRemaining < generationCreditCost) {
+        setCreditNotice(`You need ${generationCreditCost} credits to generate a project. Recharge to continue.`);
+        return;
+      }
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: promptText, modelConfig, userId: user?.uid }),
       });
-      const newProject = await res.json();
+      const contentType = res.headers.get('content-type') || '';
+      const responseText = await res.text();
+      if (res.status === 402) {
+        const detail = (() => { try { return JSON.parse(responseText); } catch { return null; } })();
+        setCreditNotice(detail?.error || 'You do not have enough credits to generate a project.');
+        return;
+      }
+      if (!res.ok || !contentType.includes('application/json')) {
+        const detail = responseText.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 240);
+        throw new Error(`Project generation failed (${res.status}). ${detail || 'The server returned a non-JSON response.'}`);
+      }
+      const newProject = JSON.parse(responseText);
       
       // Save directly to Firestore database
       if (user) {
@@ -152,7 +169,7 @@ function AppContent() {
       setProjects((prev) => [newProject, ...prev]);
 
       // Deduct credits from user account
-      const estDeduction = 450;
+      const estDeduction = 350;
       if (user) {
         await updateUserCredits(estDeduction);
       }
@@ -160,6 +177,7 @@ function AppContent() {
       navigate(`/projects/${newProject.id}`);
     } catch (err) {
       console.error('Error forging project:', err);
+      alert(err instanceof Error ? err.message : 'Project generation failed. Please try again.');
     }
   };
 
@@ -468,10 +486,22 @@ function AppContent() {
       }
       return [updatedProject, ...prev];
     });
+    if (user) {
+      void saveFirestoreProject(updatedProject, user.uid);
+    }
   };
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col font-sans antialiased text-slate-100 pb-16">
+      {creditNotice && (
+        <div role="alert" className="fixed top-4 right-4 z-[100] max-w-sm rounded-xl border border-amber-400/40 bg-[#1b1610] p-4 shadow-2xl">
+          <p className="text-sm text-amber-100">{creditNotice}</p>
+          <div className="mt-3 flex gap-3 text-xs font-bold">
+            <button onClick={() => { setCreditNotice(null); navigate('/pricing'); }} className="rounded bg-amber-400 px-3 py-2 text-black">Recharge credits</button>
+            <button onClick={() => setCreditNotice(null)} className="text-slate-300">Dismiss</button>
+          </div>
+        </div>
+      )}
       <Navbar
         creditsRemaining={activeSub.creditsRemaining}
         creditsTotal={activeSub.creditsTotal}

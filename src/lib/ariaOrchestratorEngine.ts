@@ -1,5 +1,6 @@
 import { Project, Agent, TestQualityAudit, AstAuditResult, DeploymentCertificate } from '../types';
 import { callMultiProviderLLM } from './multi-llm-provider.js';
+import { AGENT_ROSTER } from '../config/agentRoster.js';
 
 export const ARIA_SYSTEM_INSTRUCTIONS = `SYSTEM INSTRUCTIONS — Aria, DevForge CEO Executive Orchestrator
 Model: gemini-2.5-pro (escalate from gemini-2.5-flash if a milestone needs
@@ -242,41 +243,41 @@ export const FIXED_SWARM_ROSTER: Record<string, SwarmLeadRosterItem> = {
     id: 'ag_pm',
     name: 'Parker Lead',
     role: 'Product Manager',
-    provider: 'openrouter',
-    primaryModel: 'meta-llama/llama-3.3-70b-instruct:free',
-    fallbackModels: ['deepseek/deepseek-chat:free', 'openrouter/free']
+    provider: AGENT_ROSTER.parker.provider,
+    primaryModel: AGENT_ROSTER.parker.defaultModel,
+    fallbackModels: AGENT_ROSTER.parker.fallbackModels
   },
   sophia: {
     id: 'ag_arch',
     name: 'Sophia Lead',
     role: 'Solution Architect',
-    provider: 'openrouter',
-    primaryModel: 'deepseek/deepseek-r1:free',
-    fallbackModels: ['deepseek/deepseek-chat:free', 'qwen/qwen-2.5-coder-32b-instruct:free']
+    provider: AGENT_ROSTER.sophia.provider,
+    primaryModel: AGENT_ROSTER.sophia.defaultModel,
+    fallbackModels: AGENT_ROSTER.sophia.fallbackModels
   },
   frank: {
     id: 'ag_fe',
     name: 'Frank Lead',
     role: 'Frontend Engineer',
-    provider: 'nvidia',
-    primaryModel: 'meta/llama-3.1-70b-instruct',
-    fallbackModels: ['meta/llama-3.1-70b-instruct'] // retry same model
+    provider: AGENT_ROSTER.frank.provider,
+    primaryModel: AGENT_ROSTER.frank.defaultModel,
+    fallbackModels: AGENT_ROSTER.frank.fallbackModels
   },
   quinn: {
     id: 'ag_qa',
     name: 'Quinn Lead',
     role: 'QA & Security Lead',
-    provider: 'groq',
-    primaryModel: 'llama-3.3-70b-versatile',
-    fallbackModels: ['llama-3.3-70b-versatile'] // retry same model
+    provider: AGENT_ROSTER.quinn.provider,
+    primaryModel: AGENT_ROSTER.quinn.defaultModel,
+    fallbackModels: AGENT_ROSTER.quinn.fallbackModels
   },
   devon: {
     id: 'ag_sre',
     name: 'Devon Lead',
     role: 'DevOps & SRE Lead',
-    provider: 'groq',
-    primaryModel: 'mixtral-8x7b-32768',
-    fallbackModels: ['mixtral-8x7b-32768'] // retry same model
+    provider: AGENT_ROSTER.devon.provider,
+    primaryModel: AGENT_ROSTER.devon.defaultModel,
+    fallbackModels: AGENT_ROSTER.devon.fallbackModels
   }
 };
 
@@ -423,16 +424,18 @@ export function runAstAudit(project: Project): AstAuditResult {
   let securityAlerts = 0;
   let port3000Configured = false;
 
-  // Check Dockerfile and docker-compose for port 3000
+  // Static sites do not expose an application port. Require an ingress
+  // declaration only when the generated artifact actually contains a server.
   const dockerfile = project.files.find(f => f.path === 'Dockerfile' || f.name === 'Dockerfile');
   const dockerCompose = project.files.find(f => f.path.includes('docker-compose') || f.name.includes('docker-compose'));
+  const requiresServer = project.files.some(f => /(^|\/)(server|api)\//.test(f.path) || /express\(|createServer\(/.test(f.content));
   
   if (
     (dockerfile && dockerfile.content.includes('3000')) ||
     (dockerCompose && dockerCompose.content.includes('3000'))
   ) {
     port3000Configured = true;
-  } else {
+  } else if (requiresServer) {
     errors.push('Port 3000 ingress missing from Dockerfile or docker-compose.yml configuration.');
   }
 
@@ -465,7 +468,7 @@ export function runAstAudit(project: Project): AstAuditResult {
     }
   });
 
-  const passed = errors.length === 0 && brokenReferences.length === 0 && securityAlerts === 0 && port3000Configured;
+  const passed = errors.length === 0 && brokenReferences.length === 0 && securityAlerts === 0 && (!requiresServer || port3000Configured);
 
   return {
     passed,

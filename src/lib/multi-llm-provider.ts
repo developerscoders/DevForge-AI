@@ -22,6 +22,12 @@ export interface LLMResponse {
 function getOpenRouterCandidateModels(requestedModel?: string): string[] {
   const req = requestedModel?.trim() || '';
 
+  // Roster entries are deliberate, verified IDs; never rewrite them to a
+  // similarly named :free model because that changes the model the user chose.
+  if (req === 'meta-llama/llama-3.2-1b-instruct' || req === 'deepseek/deepseek-chat-v3.1') {
+    return [req];
+  }
+
   // Active verified free models on OpenRouter (2025/2026):
   // - meta-llama/llama-3.3-70b-instruct:free (Latest high-power Llama 3.3 70B)
   // - deepseek/deepseek-r1:free (Latest reasoning R1 model)
