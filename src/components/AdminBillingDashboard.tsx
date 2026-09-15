@@ -602,7 +602,7 @@ export default function AdminBillingDashboard({
                   {profile?.email || user?.email || 'developer@devforge.ai'}
                 </div>
                 <div className="text-[10px] text-slate-500 font-mono">
-                  UID: <span className="text-slate-400">{profile?.uid || user?.uid || 'guest_user'}</span>
+                  UID: <span className="text-slate-400">{profile?.uid || user?.uid || 'Unauthenticated'}</span>
                 </div>
               </div>
 

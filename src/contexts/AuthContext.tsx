@@ -44,54 +44,33 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const GUEST_STORAGE_KEY = 'devforge_guest_profile_v2';
-
-function getInitialGuestProfile(): UserProfile {
-  try {
-    const saved = localStorage.getItem(GUEST_STORAGE_KEY);
-    if (saved) {
-      return JSON.parse(saved);
-    }
-  } catch (e) {}
-
-  return {
-    uid: 'guest_user',
-    email: 'developer@sandbox.local',
-    displayName: 'Lead Engineer',
-    photoURL: 'https://api.dicebear.com/7.x/bottts/svg?seed=engineer',
-    role: 'architect',
-    creditsRemaining: 0,
-    creditsTotal: 0,
-    planId: 'free',
-    planName: 'Free Tier',
-    billingCycle: 'monthly',
-    nextRenewal: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().split('T')[0],
-    referralCode: 'DEV_GUEST',
-    referralsCount: 0,
-    referralBonus: 0,
-    createdAt: new Date().toISOString(),
-  };
-}
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(getInitialGuestProfile);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-
-  const saveGuestProfile = (updated: UserProfile) => {
-    setProfile(updated);
-    try {
-      localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(updated));
-    } catch (e) {}
-  };
 
   const syncUserProfile = async (currentUser: User) => {
     try {
       const userDocRef = doc(db, 'users', currentUser.uid);
       const docSnap = await getDoc(userDocRef);
-
       const generatedRefCode = `DEV_${currentUser.uid.substring(0, 6).toUpperCase()}`;
       const nextMonth = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().split('T')[0];
+
+      // Dynamically fetch Free plan definition from Firestore database
+      let dbFreeCredits = 0;
+      let dbFreePlanName = 'Free Tier';
+      try {
+        const freePlanSnap = await getDoc(doc(db, 'plans', 'free'));
+        if (freePlanSnap.exists()) {
+          const d = freePlanSnap.data();
+          if (typeof d.credits === 'number') dbFreeCredits = d.credits;
+          else dbFreeCredits = 0;
+
+          if (d.name) dbFreePlanName = d.name;
+        }
+      } catch (e) {
+        console.warn('Could not read free plan from Firestore:', e);
+      }
 
       if (!docSnap.exists()) {
         const newProfile: UserProfile = {
@@ -100,10 +79,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Engineer',
           photoURL: currentUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.uid}`,
           role: 'architect',
-          creditsRemaining: 0,
-          creditsTotal: 0,
+          creditsRemaining: dbFreeCredits,
+          creditsTotal: dbFreeCredits,
           planId: 'free',
-          planName: 'Free Tier',
+          planName: dbFreePlanName,
           billingCycle: 'monthly',
           nextRenewal: nextMonth,
           referralCode: generatedRefCode,
@@ -115,16 +94,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setProfile(newProfile);
       } else {
         const data = docSnap.data();
+        let creditsRemaining = data.creditsRemaining !== undefined ? data.creditsRemaining : 0;
+        let creditsTotal = data.creditsTotal !== undefined ? data.creditsTotal : 0;
+
+        // If an existing user document has 0/0 credits on the free tier, assign the credits from Firestore database
+        if (creditsRemaining === 0 && creditsTotal === 0 && (!data.planId || data.planId === 'free')) {
+          creditsRemaining = dbFreeCredits;
+          creditsTotal = dbFreeCredits;
+          try {
+            await setDoc(userDocRef, { creditsRemaining, creditsTotal }, { merge: true });
+          } catch (e) {
+            console.warn('Failed to update free tier credits in Firestore:', e);
+          }
+        }
+
         const existingProfile: UserProfile = {
           uid: currentUser.uid,
           email: data.email || currentUser.email,
           displayName: data.displayName || currentUser.displayName || 'Engineer',
           photoURL: data.photoURL || currentUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.uid}`,
           role: data.role || 'architect',
-          creditsRemaining: data.creditsRemaining !== undefined ? data.creditsRemaining : 0,
-          creditsTotal: data.creditsTotal !== undefined ? data.creditsTotal : 0,
+          creditsRemaining,
+          creditsTotal,
           planId: data.planId || 'free',
-          planName: data.planName || 'Free Tier',
+          planName: data.planName || dbFreePlanName,
           billingCycle: data.billingCycle || 'monthly',
           nextRenewal: data.nextRenewal || nextMonth,
           referralCode: data.referralCode || generatedRefCode,
@@ -168,8 +161,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           unsubsDoc();
           unsubsDoc = null;
         }
-        // Fall back to saved guest profile so state is maintained
-        setProfile(getInitialGuestProfile());
+        // Unauthenticated visitor: profile is null
+        setProfile(null);
         setLoading(false);
       }
     });
@@ -191,16 +184,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const generatedRefCode = `DEV_${credential.user.uid.substring(0, 6).toUpperCase()}`;
       const nextMonth = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().split('T')[0];
 
+      let dbFreeCredits = 500;
+      let dbFreePlanName = 'Free Tier';
+      try {
+        const freePlanSnap = await getDoc(doc(db, 'plans', 'free'));
+        if (freePlanSnap.exists()) {
+          const d = freePlanSnap.data();
+          if (typeof d.credits === 'number') dbFreeCredits = d.credits;
+          if (d.name) dbFreePlanName = d.name;
+        }
+      } catch (e) {}
+
       const newProfile: UserProfile = {
         uid: credential.user.uid,
         email: credential.user.email,
         displayName: name,
         photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${credential.user.uid}`,
         role: 'architect',
-        creditsRemaining: 0,
-        creditsTotal: 0,
+        creditsRemaining: dbFreeCredits,
+        creditsTotal: dbFreeCredits,
         planId: 'free',
-        planName: 'Free Tier',
+        planName: dbFreePlanName,
         billingCycle: 'monthly',
         nextRenewal: nextMonth,
         referralCode: generatedRefCode,
@@ -221,26 +225,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     await signOut(auth);
-    setProfile(getInitialGuestProfile());
+    setProfile(null);
+    try {
+      localStorage.removeItem('devforge_guest_profile_v2');
+    } catch (e) {}
   };
 
   const updateUserCredits = async (deductAmount: number) => {
-    if (!profile) return;
+    if (!profile || !user) return;
     const newRemaining = Math.max(0, profile.creditsRemaining - deductAmount);
-    
-    if (user) {
-      try {
-        const userDocRef = doc(db, 'users', user.uid);
-        await setDoc(userDocRef, { creditsRemaining: newRemaining }, { merge: true });
-      } catch (e) {}
-    }
-
-    const updated = { ...profile, creditsRemaining: newRemaining };
-    if (!user) {
-      saveGuestProfile(updated);
-    } else {
-      setProfile(updated);
-    }
+    try {
+      const userDocRef = doc(db, 'users', user.uid);
+      await setDoc(userDocRef, { creditsRemaining: newRemaining }, { merge: true });
+    } catch (e) {}
+    setProfile({ ...profile, creditsRemaining: newRemaining });
   };
 
   const updateUserSubscription = async (
@@ -249,20 +247,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     cycle: 'monthly' | 'yearly',
     credits: number
   ) => {
+    if (!user || !profile) return;
     const nextRenewalDate = new Date(
       Date.now() + (cycle === 'yearly' ? 365 : 30) * 24 * 3600 * 1000
     )
       .toISOString()
       .split('T')[0];
 
-    const currentTotal = profile?.creditsTotal || 0;
-    const currentRemaining = profile?.creditsRemaining || 0;
+    const currentTotal = profile.creditsTotal || 0;
+    const currentRemaining = profile.creditsRemaining || 0;
 
     const newCreditsRemaining = currentRemaining + credits;
     const newCreditsTotal = currentTotal + credits;
 
     const updatedProfile: UserProfile = {
-      ...(profile || getInitialGuestProfile()),
+      ...profile,
       planId,
       planName,
       billingCycle: cycle,
@@ -271,29 +270,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       nextRenewal: nextRenewalDate,
     };
 
-    if (user) {
-      try {
-        const userDocRef = doc(db, 'users', user.uid);
-        await setDoc(
-          userDocRef,
-          {
-            planId,
-            planName,
-            billingCycle: cycle,
-            creditsRemaining: newCreditsRemaining,
-            creditsTotal: newCreditsTotal,
-            nextRenewal: nextRenewalDate,
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-      } catch (e) {
-        console.warn('Failed to update user profile in Firestore:', e);
-      }
-      setProfile(updatedProfile);
-    } else {
-      saveGuestProfile(updatedProfile);
+    try {
+      const userDocRef = doc(db, 'users', user.uid);
+      await setDoc(
+        userDocRef,
+        {
+          planId,
+          planName,
+          billingCycle: cycle,
+          creditsRemaining: newCreditsRemaining,
+          creditsTotal: newCreditsTotal,
+          nextRenewal: nextRenewalDate,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.warn('Failed to update user profile in Firestore:', e);
     }
+    setProfile(updatedProfile);
   };
 
   const refreshProfile = async () => {

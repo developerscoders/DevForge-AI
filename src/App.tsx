@@ -40,8 +40,7 @@ import {
   saveFirestoreCoupon,
   fetchFirestoreTeamMembers,
   saveFirestoreTeamMember,
-  updateFirestoreUserSubscription,
-  DEFAULT_PLANS
+  updateFirestoreUserSubscription
 } from './lib/firestoreService';
 
 function AppContent() {
@@ -50,7 +49,7 @@ function AppContent() {
 
   // Root database states
   const [projects, setProjects] = useState<Project[]>([]);
-  const [plans, setPlans] = useState<SubscriptionPlan[]>(DEFAULT_PLANS);
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [marketplaceProducts, setMarketplaceProducts] = useState<MarketplaceProduct[]>([]);
@@ -257,7 +256,7 @@ function AppContent() {
     alreadyVerified = false
   ) => {
     try {
-      const selectedPlanObj = plans.find((p) => p.id === planId) || DEFAULT_PLANS.find((p) => p.id === planId);
+      const selectedPlanObj = plans.find((p) => p.id === planId);
       const planName = selectedPlanObj ? selectedPlanObj.name : `${extraCredits || 1000} Extra Credits Top-up`;
       const basePrice = selectedPlanObj
         ? cycle === 'yearly'
@@ -303,7 +302,7 @@ function AppContent() {
             cycle,
             extraCredits,
             coupon,
-            userId: user?.uid || 'guest_user'
+            userId: user?.uid || 'anonymous'
           })
         });
 

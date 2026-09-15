@@ -19,13 +19,13 @@ import {
 import SEOHead from '../components/SEOHead';
 import { PAGE_SEO } from '../lib/seoConfig';
 import { BlueprintTemplate } from '../types';
-import { fetchFirestoreTemplates, saveFirestoreTemplate, DEFAULT_TEMPLATES } from '../lib/firestoreService';
+import { fetchFirestoreTemplates, saveFirestoreTemplate } from '../lib/firestoreService';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function TemplatesPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [templates, setTemplates] = useState<BlueprintTemplate[]>(DEFAULT_TEMPLATES);
+  const [templates, setTemplates] = useState<BlueprintTemplate[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');

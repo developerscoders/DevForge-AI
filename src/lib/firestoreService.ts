@@ -100,101 +100,6 @@ export const fetchFirestoreAdminTransactions = async (): Promise<Transaction[]> 
     .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
 };
 
-// Default initial plans
-export const DEFAULT_PLANS: SubscriptionPlan[] = [
-  {
-    id: 'free',
-    name: 'Free Tier',
-    priceMonthly: 0,
-    priceYearly: 0,
-    credits: 100,
-    features: ['1 Project limit', 'Basic models only', 'Standard chat sandbox', 'No webhook channels']
-  },
-  {
-    id: 'starter',
-    name: 'Starter Plan',
-    priceMonthly: 49,
-    priceYearly: 470,
-    credits: 1000,
-    features: ['3 Projects concurrent', 'Advanced models available', 'Razorpay client access', 'GST-compliant invoice download', 'Standard 12h SRE support']
-  },
-  {
-    id: 'pro',
-    name: 'Pro Plan',
-    priceMonthly: 99,
-    priceYearly: 950,
-    credits: 5000,
-    features: ['Unlimited Projects', 'Intelligent Model Routing', 'Full Marketplace listing publish', 'Collaborative Agent Swarms', 'Dedicated Discord channel']
-  },
-  {
-    id: 'enterprise',
-    name: 'Enterprise Plan',
-    priceMonthly: 299,
-    priceYearly: 2870,
-    credits: 25000,
-    features: ['Private SRE containers', 'Custom Fine-Tuning endpoints', 'Dedicated SRE Manager', 'SSO/SAML Authentication', '99.99% SLA Guarantee']
-  }
-];
-
-// Default initial marketplace products
-export const DEFAULT_MARKETPLACE_PRODUCTS: MarketplaceProduct[] = [
-  {
-    id: 'm1',
-    title: 'SRE Docker Auto-Deployer Agent',
-    description: 'Agent specialized in configuring self-healing Docker structures, health probes, and Kubernetes configurations.',
-    price: 19,
-    type: 'agent',
-    author: 'DevForge Core',
-    rating: 4.9,
-    downloads: 342,
-    earnings: 6498,
-    category: 'sre'
-  },
-  {
-    id: 'm2',
-    title: 'Next.js 15 SaaS Dashboard Template',
-    description: 'Fully configured SaaS dashboard setup with server actions, Tailwind v4, next-auth, and clean bento panels.',
-    price: 29,
-    type: 'template',
-    author: 'Alex Rivera',
-    rating: 4.8,
-    downloads: 180,
-    earnings: 5220,
-    category: 'template'
-  },
-  {
-    id: 'm3',
-    title: 'Supabase Sync Workflow Pack',
-    description: 'Automated drag-and-drop workflow nodes to instantly build and synchronize table structures with Supabase.',
-    price: 0,
-    type: 'workflow',
-    author: 'InnoTech Lab',
-    rating: 4.6,
-    downloads: 890,
-    earnings: 0,
-    category: 'workflow'
-  },
-  {
-    id: 'm4',
-    title: 'Gemini RAG Embedding Plugin',
-    description: 'Sleek vector search embedding connector optimized to index large folder codebases with gemini-embedding-2-preview.',
-    price: 15,
-    type: 'plugin',
-    author: 'AI Wizard',
-    rating: 4.7,
-    downloads: 95,
-    earnings: 1425,
-    category: 'ai'
-  }
-];
-
-// Default initial coupons
-export const DEFAULT_COUPONS: Coupon[] = [
-  { code: 'LAUNCH20', discountType: 'percent', discountValue: 20, description: '20% off any SRE engine upgrade', active: true },
-  { code: 'DEVKIT50', discountType: 'flat', discountValue: 50, description: '$50 instant credit waiver', active: true },
-  { code: 'PROSRE100', discountType: 'flat', discountValue: 100, description: '$100 enterprise onboarding voucher', active: true }
-];
-
 // ==========================================
 // 1. Subscription Plans Firestore Operations
 // ==========================================
@@ -207,20 +112,11 @@ export const fetchFirestorePlans = async (): Promise<SubscriptionPlan[]> => {
       plans.push({ id: d.id, ...d.data() } as SubscriptionPlan);
     });
 
-    if (plans.length > 0) {
-      return plans;
-    }
-
-    // Seed defaults if database collection is empty and user is authenticated
-    if (auth.currentUser) {
-      for (const p of DEFAULT_PLANS) {
-        await setDoc(doc(db, 'plans', p.id), p);
-      }
-    }
-    return DEFAULT_PLANS;
+    // Natural sort by priceMonthly ascending: Free, Starter, Pro, Enterprise
+    return plans.sort((a, b) => (a.priceMonthly || 0) - (b.priceMonthly || 0));
   } catch (e) {
-    console.warn('Error reading plans from Firestore, falling back to defaults:', e);
-    return DEFAULT_PLANS;
+    console.error('Error reading plans from Firestore database:', e);
+    return [];
   }
 };
 
@@ -245,21 +141,10 @@ export const fetchFirestoreCoupons = async (): Promise<Coupon[]> => {
     snap.forEach((d) => {
       coupons.push(d.data() as Coupon);
     });
-
-    if (coupons.length > 0) {
-      return coupons;
-    }
-
-    // Seed defaults if empty and auth available
-    if (auth.currentUser) {
-      for (const c of DEFAULT_COUPONS) {
-        await setDoc(doc(db, 'coupons', c.code), c);
-      }
-    }
-    return DEFAULT_COUPONS;
+    return coupons;
   } catch (e) {
-    console.warn('Error reading coupons from Firestore:', e);
-    return DEFAULT_COUPONS;
+    console.error('Error reading coupons from Firestore database:', e);
+    return [];
   }
 };
 
@@ -432,21 +317,10 @@ export const fetchFirestoreMarketplaceProducts = async (): Promise<MarketplacePr
     const snap = await getDocs(collection(db, 'marketplace_products'));
     const products: MarketplaceProduct[] = [];
     snap.forEach((d) => products.push({ id: d.id, ...d.data() } as MarketplaceProduct));
-    
-    if (products.length > 0) {
-      return products;
-    }
-
-    // Seed defaults if empty and auth is present
-    if (auth.currentUser) {
-      for (const p of DEFAULT_MARKETPLACE_PRODUCTS) {
-        await setDoc(doc(db, 'marketplace_products', p.id), p);
-      }
-    }
-    return DEFAULT_MARKETPLACE_PRODUCTS;
+    return products;
   } catch (e) {
-    console.warn('Error fetching marketplace products from Firestore, using fallback:', e);
-    return DEFAULT_MARKETPLACE_PRODUCTS;
+    console.error('Error fetching marketplace products from Firestore database:', e);
+    return [];
   }
 };
 
@@ -614,81 +488,6 @@ export const updateFirestoreUserSubscription = async (
 // ==========================================
 // 8. Starter Blueprints & Templates in Firestore
 // ==========================================
-export const DEFAULT_TEMPLATES: BlueprintTemplate[] = [
-  {
-    id: 'saas-crm',
-    title: 'Modern B2B SaaS CRM Platform',
-    category: 'SaaS',
-    description: 'Complete multi-tenant customer relationship platform with pipeline stages, activity tracking, contact management, and revenue forecasting.',
-    tags: ['React', 'Tailwind', 'Pipeline', 'Multi-tenant'],
-    suggestedPrompt: 'Build a production-ready B2B SaaS CRM with contact directories, drag-and-drop lead kanban pipeline, deals tracking, activity timeline, and revenue forecast charts.',
-    difficulty: 'Enterprise',
-    estimatedFiles: 18,
-    author: 'DevForge Systems',
-    createdAt: '2026-09-01'
-  },
-  {
-    id: 'analytics-dashboard',
-    title: 'Real-Time Telemetry & Cloud Metrics',
-    category: 'Analytics',
-    description: 'High-throughput system monitoring dashboard with interactive time-series charts, latency histograms, error rate logs, and uptime indicators.',
-    tags: ['Recharts', 'Live Stream', 'Metrics', 'SRE'],
-    suggestedPrompt: 'Create a dark-mode real-time DevOps telemetry dashboard with server CPU/memory gauges, Recharts revenue line graphs, active error logs stream, and cluster node health status.',
-    difficulty: 'Intermediate',
-    estimatedFiles: 14,
-    author: 'SRE Core Team',
-    createdAt: '2026-09-01'
-  },
-  {
-    id: 'ai-knowledge-base',
-    title: 'AI Documentation & Knowledge Hub',
-    category: 'AI Tools',
-    description: 'Intelligent developer documentation hub with instant vector search, interactive code playgrounds, markdown renderer, and AI assistant query modal.',
-    tags: ['Markdown', 'AI Search', 'Docs', 'Dark UI'],
-    suggestedPrompt: 'Create a developer documentation portal with hierarchical sidebar navigation, instant search modal, code syntax highlighting, copyable snippets, and interactive API playground.',
-    difficulty: 'Intermediate',
-    estimatedFiles: 16,
-    author: 'DevForge AI Labs',
-    createdAt: '2026-09-02'
-  },
-  {
-    id: 'digital-marketplace',
-    title: 'Digital Goods & Plugin Marketplace',
-    category: 'E-Commerce',
-    description: 'E-commerce platform for developer plugins, digital assets, and AI prompts with checkout flow, rating breakdowns, and creator dashboards.',
-    tags: ['E-Commerce', 'Razorpay', 'Digital Assets', 'Creator'],
-    suggestedPrompt: 'Build a creator marketplace for digital developer plugins with categorized browsing, search & tag filters, rating reviews, cart checkout, and digital download receipt simulator.',
-    difficulty: 'Enterprise',
-    estimatedFiles: 20,
-    author: 'Marketplace Guild',
-    createdAt: '2026-09-02'
-  },
-  {
-    id: 'kanban-workflow',
-    title: 'Agile Sprint & Team Task Board',
-    category: 'Developer Tools',
-    description: 'Collaborative task management board featuring backlog, active sprints, story point estimators, priority tags, and assignee filtering.',
-    tags: ['Workflow', 'Drag & Drop', 'Productivity', 'Agile'],
-    suggestedPrompt: 'Build an agile project sprint management board with customizable status columns, story point poker estimation, team assignee filters, and markdown task descriptions.',
-    difficulty: 'Beginner',
-    estimatedFiles: 12,
-    author: 'Agile Ops',
-    createdAt: '2026-09-03'
-  },
-  {
-    id: 'ai-conversational-studio',
-    title: 'Multi-Persona AI Chat Studio',
-    category: 'AI Tools',
-    description: 'Advanced conversational workspace supporting multiple system personas, parameter tuning (temperature, top-p), streaming response rendering, and prompt history.',
-    tags: ['AI Chat', 'Gemini API', 'Streaming', 'Personas'],
-    suggestedPrompt: 'Create a multi-persona AI conversational studio with custom system prompts, temperature sliders, streaming message bubble animations, and export chat to JSON/Markdown.',
-    difficulty: 'Intermediate',
-    estimatedFiles: 15,
-    author: 'Cognitive Engine',
-    createdAt: '2026-09-03'
-  }
-];
-
 export const fetchFirestoreTemplates = async (): Promise<BlueprintTemplate[]> => {
   try {
     const coll = collection(db, 'templates');
@@ -697,21 +496,10 @@ export const fetchFirestoreTemplates = async (): Promise<BlueprintTemplate[]> =>
     snap.forEach((d) => {
       list.push({ id: d.id, ...d.data() } as BlueprintTemplate);
     });
-
-    if (list.length > 0) {
-      return list;
-    }
-
-    // Seed defaults to Firestore if collection is empty and user is logged in
-    if (auth.currentUser) {
-      for (const t of DEFAULT_TEMPLATES) {
-        await setDoc(doc(db, 'templates', t.id), t);
-      }
-    }
-    return DEFAULT_TEMPLATES;
+    return list;
   } catch (e) {
-    console.warn('Error fetching templates from Firestore, using defaults:', e);
-    return DEFAULT_TEMPLATES;
+    console.error('Error fetching templates from Firestore database:', e);
+    return [];
   }
 };
 
@@ -725,4 +513,5 @@ export const saveFirestoreTemplate = async (template: BlueprintTemplate) => {
     return false;
   }
 };
+
 
