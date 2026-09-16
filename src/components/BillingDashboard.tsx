@@ -447,8 +447,13 @@ export default function BillingDashboard({
           }
         };
 
-        // Attach server order ID if present and valid
-        if (data?.order?.orderId && !data.order.orderId.includes('sim')) {
+        // Only attach server order ID if it was genuinely created by Razorpay API
+        // Passing an unverified or synthetic order_id causes Razorpay standard_checkout/preferences to fail with BAD_REQUEST_ERROR
+        const isGenuineRazorpayOrder = Boolean(
+          data?.order?.orderId &&
+          (data?.order?.isRealOrder || (data?.order?.rawResponse?.id === data.order.orderId && !data?.order?.rawResponse?.is_simulation))
+        );
+        if (isGenuineRazorpayOrder) {
           options.order_id = data.order.orderId;
         }
 

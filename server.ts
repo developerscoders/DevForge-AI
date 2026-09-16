@@ -2127,8 +2127,16 @@ app.post('/api/payment/create-order', async (req, res) => {
       receiptId: `rcpt_${Math.random().toString(36).substring(2, 9)}`,
       metadata: { description }
     });
+    const isRealOrder = Boolean(order.rawResponse && (order.rawResponse as any).id && !(order.rawResponse as any).is_simulation);
     const keyId = process.env.VITE_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID || 'rzp_test_TZVZBneslH7cuS';
-    res.json({ order, description, keyId });
+    res.json({
+      order: {
+        ...order,
+        isRealOrder
+      },
+      description,
+      keyId
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

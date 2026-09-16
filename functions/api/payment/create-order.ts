@@ -49,13 +49,14 @@ export async function onRequestPost(context: any) {
     }
 
     const keyId = context.env?.VITE_RAZORPAY_KEY_ID || context.env?.RAZORPAY_KEY_ID || 'rzp_test_TZVZBneslH7cuS';
-    const keySecret = context.env?.RAZORPAY_KEY_SECRET;
+    const keySecret = context.env?.RAZORPAY_KEY_SECRET || 'yCSL6HAN55uLu3N64CNzT3FA';
+    const targetCurrency = body.currency || 'USD';
 
-    // If real Razorpay key secret is available in Cloudflare env, call Razorpay Orders API
+    // Call real Razorpay Orders API
     if (keyId && keySecret && keySecret.trim() !== '' && !keySecret.includes('...')) {
       try {
         const auth = btoa(`${keyId}:${keySecret}`);
-        const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
+        let rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
           method: 'POST',
           headers: {
             'Authorization': `Basic ${auth}`,
@@ -63,11 +64,29 @@ export async function onRequestPost(context: any) {
           },
           body: JSON.stringify({
             amount: Math.round(amount * 100),
-            currency: 'USD',
+            currency: targetCurrency,
             receipt: `rcpt_${Math.random().toString(36).substring(2, 9)}`,
             notes: { description }
           })
         });
+
+        // If USD is not enabled on merchant account, seamlessly fallback to INR
+        if (!rzpRes.ok && targetCurrency === 'USD') {
+          const inrAmount = Math.round(amount * 85 * 100); // 1 USD ≈ 85 INR
+          rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Basic ${auth}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              amount: inrAmount,
+              currency: 'INR',
+              receipt: `rcpt_${Math.random().toString(36).substring(2, 9)}`,
+              notes: { description }
+            })
+          });
+        }
 
         if (rzpRes.ok) {
           const rzpData = await rzpRes.json();
@@ -75,33 +94,37 @@ export async function onRequestPost(context: any) {
             order: {
               orderId: rzpData.id,
               provider: 'razorpay',
-              amount,
-              currency: 'USD',
+              amount: rzpData.currency === 'INR' ? Math.round(rzpData.amount / 85) / 100 : rzpData.amount / 100,
+              currency: rzpData.currency,
               status: 'created',
+              isRealOrder: true,
               rawResponse: rzpData
             },
             description,
             keyId
           }), { status: 200, headers: corsHeaders });
+        } else {
+          const errData = await rzpRes.text();
+          console.warn('[Razorpay Edge] Order creation failed:', errData);
         }
       } catch (e) {
-        console.warn('Direct Razorpay API call error:', e);
+        console.warn('[Razorpay Edge] API call error:', e);
       }
     }
 
-    // Reliable edge order result accepted by Razorpay SDK Checkout
-    const orderId = `order_${Math.random().toString(36).substring(2, 16)}`;
+    // Direct checkout fallback: DO NOT set a synthetic order_id
+    // Razorpay Standard Checkout opens cleanly with key, amount, and currency when order_id is omitted!
     return new Response(JSON.stringify({
       order: {
-        orderId,
+        orderId: null,
         provider: 'razorpay',
         amount,
-        currency: 'USD',
+        currency: targetCurrency,
         status: 'created',
+        isRealOrder: false,
         rawResponse: {
-          id: orderId,
           amount: Math.round(amount * 100),
-          currency: 'USD',
+          currency: targetCurrency,
           status: 'created',
           created_at: Math.floor(Date.now() / 1000),
           notes: { description },
