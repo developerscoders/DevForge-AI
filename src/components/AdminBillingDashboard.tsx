@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { WebhookEvent, Coupon, Transaction } from '../types';
 import {
   ShieldAlert,
@@ -86,7 +87,18 @@ export default function AdminBillingDashboard({
   onAddCoupon,
 }: AdminBillingDashboardProps) {
   const { profile, user } = useAuth();
+  const location = useLocation();
   const [activeTab, setActiveTab] = useState<'analytics' | 'tenants' | 'providers' | 'coupons' | 'webhooks' | 'plans' | 'cms'>('analytics');
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const tabParam = params.get('tab');
+    if (tabParam && ['analytics', 'tenants', 'providers', 'coupons', 'webhooks', 'plans', 'cms'].includes(tabParam)) {
+      setActiveTab(tabParam as any);
+    } else if (location.pathname.includes('/billing')) {
+      setActiveTab('webhooks');
+    }
+  }, [location.pathname, location.search]);
 
   // CMS & SEO Management
   const [cmsPagesList, setCmsPagesList] = useState<CMSPage[]>(DEFAULT_CMS_PAGES);
@@ -182,6 +194,7 @@ export default function AdminBillingDashboard({
   const [databaseAnalytics, setDatabaseAnalytics] = useState<FirestoreAdminAnalytics | null>(null);
   const [databaseTransactions, setDatabaseTransactions] = useState<Transaction[]>([]);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
 
   const fetchTenants = async () => {
     try {
@@ -1187,14 +1200,72 @@ export default function AdminBillingDashboard({
 
       {/* 5. WEBHOOKS TAB */}
       {activeTab === 'webhooks' && (
-        <div className="bg-[#111111] border border-[#222222] p-6 shadow-xl space-y-4">
-          <div className="flex justify-between items-center pb-2 border-b border-[#222222]">
-            <div>
-              <span className="label text-[9px] text-slate-500">SaaS Streaming Logs</span>
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-200 mt-1">Live Webhook Payload Logs</h3>
+        <div className="space-y-6">
+          {/* Webhook Configuration & Verification Card */}
+          <div className="bg-[#111111] border border-[#222222] p-6 shadow-xl space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 pb-3 border-b border-[#222222]">
+              <div>
+                <span className="label text-[9px] text-emerald-400 font-bold uppercase tracking-wider">Production Webhook Fulfillment</span>
+                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-200 mt-0.5">Razorpay Webhook Endpoint Configuration</h3>
+              </div>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                ACTIVE INGRESS
+              </span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">AUDITING HEAL INGRESS</span>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Actual live payments are fulfilled securely via Razorpay Webhooks. Instead of exposing secret API keys, Razorpay delivers digitally signed HTTP events directly to this endpoint with HMAC-SHA256 signature verification.
+            </p>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-1">
+              <div className="bg-[#0a0a0a] border border-[#222222] p-3.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">Webhook Ingress URL</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = `${window.location.origin}/api/payments/razorpay/webhook`;
+                      navigator.clipboard.writeText(url);
+                      setCopiedWebhook(true);
+                      setTimeout(() => setCopiedWebhook(false), 2500);
+                    }}
+                    className="text-[10px] font-mono font-bold text-indigo-400 hover:text-indigo-300 transition"
+                  >
+                    {copiedWebhook ? 'COPIED ✓' : 'COPY URL'}
+                  </button>
+                </div>
+                <div className="font-mono text-xs text-slate-200 bg-[#050505] p-2 border border-[#1a1a1a] select-all break-all">
+                  {typeof window !== 'undefined' ? `${window.location.origin}/api/payments/razorpay/webhook` : '/api/payments/razorpay/webhook'}
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  Set this as your Webhook URL in <span className="text-slate-300 font-bold">Razorpay Dashboard &gt; Settings &gt; Webhooks</span>.
+                </div>
+              </div>
+
+              <div className="bg-[#0a0a0a] border border-[#222222] p-3.5 space-y-2">
+                <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">Supported Event Subscriptions</span>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  <span className="px-2 py-0.5 text-[10px] font-mono bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">payment.captured</span>
+                  <span className="px-2 py-0.5 text-[10px] font-mono bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">order.paid</span>
+                  <span className="px-2 py-0.5 text-[10px] font-mono bg-rose-500/10 text-rose-300 border border-rose-500/20">payment.failed</span>
+                  <span className="px-2 py-0.5 text-[10px] font-mono bg-amber-500/10 text-amber-300 border border-amber-500/20">refund.processed</span>
+                </div>
+                <div className="text-[10px] text-slate-500 pt-1">
+                  Set <code className="text-amber-400 font-mono">RAZORPAY_WEBHOOK_SECRET</code> in environment secrets to enforce cryptographic HMAC signature verification.
+                </div>
+              </div>
+            </div>
           </div>
+
+          <div className="bg-[#111111] border border-[#222222] p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-[#222222]">
+              <div>
+                <span className="label text-[9px] text-slate-500">SaaS Streaming Logs</span>
+                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-200 mt-1">Live Webhook Payload Logs</h3>
+              </div>
+              <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">AUDITING HEAL INGRESS</span>
+            </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-mono">
@@ -1227,6 +1298,7 @@ export default function AdminBillingDashboard({
             </table>
           </div>
         </div>
+      </div>
       )}
 
       {/* 6. PLAN EDITOR TAB */}

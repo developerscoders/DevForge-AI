@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useNavigate, Navigate } from 'react-router-dom';
 import {
   Project,
   FileNode,
@@ -606,6 +606,21 @@ function AppContent() {
             />
           }
         />
+        <Route
+          path="/admin/billing"
+          element={
+            <AdminBillingDashboard
+              analytics={adminAnalytics}
+              transactions={transactions}
+              coupons={coupons}
+              webhooks={webhookLogs}
+              onSimulateWebhook={handleSimulateWebhook}
+              onRefund={handleRefund}
+              onUpdatePlan={handleUpdatePlan}
+              onAddCoupon={handleAddCoupon}
+            />
+          }
+        />
 
         {/* Dedicated Live Sandbox Application Preview Route */}
         <Route
@@ -616,6 +631,9 @@ function AppContent() {
           path="/sandbox/:id"
           element={<StandalonePreview projects={projects} />}
         />
+
+        {/* Fallback route to avoid blank screen on unmatched URLs */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
   );

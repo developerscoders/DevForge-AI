@@ -488,6 +488,81 @@ export const updateFirestoreUserSubscription = async (
 // ==========================================
 // 8. Starter Blueprints & Templates in Firestore
 // ==========================================
+export const DEFAULT_DATABASE_TEMPLATES: BlueprintTemplate[] = [
+  {
+    id: 'bp_saas_metrics',
+    title: 'B2B SaaS Metrics & Billing Hub',
+    category: 'SaaS',
+    description: 'Autonomous financial telemetry dashboard tracking MRR, ARR, churn rate, user cohorts, and webhook-driven subscription invoices.',
+    tags: ['React', 'Tailwind', 'Recharts', 'Firestore', 'Webhooks'],
+    suggestedPrompt: 'Build a production-ready SaaS executive dashboard with real-time MRR, customer churn charts, subscription billing tiers, and live webhook logs.',
+    difficulty: 'Intermediate',
+    estimatedFiles: 14,
+    author: 'DevForge AI Swarm',
+    createdAt: '2026-03-01'
+  },
+  {
+    id: 'bp_ai_copilot',
+    title: 'Autonomous Code Review & SRE Swarm',
+    category: 'AI Tools',
+    description: 'Multi-agent orchestration cockpit with dedicated Architect, Senior Coder, and Security Reviewer agents inspecting pull requests and terminal output.',
+    tags: ['Gemini API', 'Agents', 'TypeScript', 'WebSockets', 'Tailwind'],
+    suggestedPrompt: 'Create a collaborative AI agent swarm workspace where a Planner, Architect, and Coder work concurrently on code refactoring with live streaming logs.',
+    difficulty: 'Enterprise',
+    estimatedFiles: 22,
+    author: 'DevForge Core',
+    createdAt: '2026-03-05'
+  },
+  {
+    id: 'bp_ecommerce_store',
+    title: 'Headless E-Commerce & Checkout Engine',
+    category: 'E-Commerce',
+    description: 'Full-stack storefront with product filtering, cart drawer, Razorpay/Stripe checkout, GST invoice calculation, and order inventory tracking.',
+    tags: ['E-Commerce', 'Cart', 'Razorpay', 'Tailwind', 'Firestore'],
+    suggestedPrompt: 'Design a clean minimalist e-commerce shop with product catalog filtering, responsive cart drawer, secure checkout modal, and automated order confirmation.',
+    difficulty: 'Intermediate',
+    estimatedFiles: 16,
+    author: 'DevForge Commerce',
+    createdAt: '2026-03-10'
+  },
+  {
+    id: 'bp_analytics_stream',
+    title: 'Real-Time Telemetry & Kafka Stream Visualizer',
+    category: 'Analytics',
+    description: 'High-frequency telemetry stream visualizer with live FPS, container CPU/Memory heatmaps, latency histograms, and alert thresholds.',
+    tags: ['Telemetry', 'D3', 'Metrics', 'Live Stream', 'Kafka'],
+    suggestedPrompt: 'Build a high-performance system telemetry dashboard displaying CPU, RAM, network I/O spikes, and alert threshold notifications in real time.',
+    difficulty: 'Enterprise',
+    estimatedFiles: 18,
+    author: 'DevForge Telemetry',
+    createdAt: '2026-03-12'
+  },
+  {
+    id: 'bp_dev_registry',
+    title: 'Microservice Service Mesh & Container Orchestrator',
+    category: 'Developer Tools',
+    description: 'Kubernetes/Docker pod supervisor with container start/stop triggers, live terminal logs, health checks, and traffic routing rules.',
+    tags: ['DevOps', 'Containers', 'Kubernetes', 'Terminal', 'Docker'],
+    suggestedPrompt: 'Create a container management dashboard allowing developers to monitor active microservices, stream terminal logs, and inspect HTTP proxy routes.',
+    difficulty: 'Intermediate',
+    estimatedFiles: 15,
+    author: 'DevForge DevOps',
+    createdAt: '2026-03-14'
+  },
+  {
+    id: 'bp_rag_knowledge',
+    title: 'Enterprise Vector Knowledge Base & Search',
+    category: 'AI Tools',
+    description: 'Semantic vector search documentation engine with markdown rendering, semantic chunking, and AI conversational QA.',
+    tags: ['RAG', 'Vector Search', 'Embeddings', 'Markdown', 'Docs'],
+    suggestedPrompt: 'Construct an AI document search application that indexes PDF/Markdown documents and provides grounded question-answering with citations.',
+    difficulty: 'Intermediate',
+    estimatedFiles: 12,
+    author: 'DevForge AI Swarm',
+    createdAt: '2026-03-15'
+  }
+];
+
 export const fetchFirestoreTemplates = async (): Promise<BlueprintTemplate[]> => {
   try {
     const coll = collection(db, 'templates');
@@ -496,10 +571,22 @@ export const fetchFirestoreTemplates = async (): Promise<BlueprintTemplate[]> =>
     snap.forEach((d) => {
       list.push({ id: d.id, ...d.data() } as BlueprintTemplate);
     });
+
+    if (list.length === 0) {
+      // Seed default templates directly to Firestore database
+      for (const t of DEFAULT_DATABASE_TEMPLATES) {
+        try {
+          await setDoc(doc(db, 'templates', t.id), t);
+          list.push(t);
+        } catch (seedErr) {
+          console.warn('Notice seeding template to Firestore:', seedErr);
+        }
+      }
+    }
     return list;
   } catch (e) {
     console.error('Error fetching templates from Firestore database:', e);
-    return [];
+    return DEFAULT_DATABASE_TEMPLATES;
   }
 };
 

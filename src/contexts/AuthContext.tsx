@@ -44,6 +44,8 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+const GUEST_STORAGE_KEY = (import.meta as any).env?.VITE_GUEST_STORAGE_KEY || 'devforge_guest_profile_v2';
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -126,6 +128,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: data.createdAt || new Date().toISOString(),
         };
         setProfile(existingProfile);
+
+        // Check if any server-side webhook captured a payment for this user while they were offline/awaiting fulfillment
+        try {
+          const pendingRes = await fetch(`/api/billing/pending-fulfillment/${currentUser.uid}`);
+          if (pendingRes.ok) {
+            const pendingData = await pendingRes.json();
+            if (pendingData?.fulfillment) {
+              const f = pendingData.fulfillment;
+              const nextRenewalDate = new Date(
+                Date.now() + (f.billingCycle === 'yearly' ? 365 : 30) * 24 * 3600 * 1000
+              ).toISOString().split('T')[0];
+
+              const pendingUpdates: any = {
+                creditsRemaining: (existingProfile.creditsRemaining || 0) + (f.creditsToAdd || 0),
+                creditsTotal: (existingProfile.creditsTotal || 0) + (f.creditsToAdd || 0),
+                updatedAt: new Date().toISOString()
+              };
+              if (f.planId) {
+                pendingUpdates.planId = f.planId;
+                pendingUpdates.planName = f.planName;
+                pendingUpdates.billingCycle = f.billingCycle;
+                pendingUpdates.nextRenewal = nextRenewalDate;
+              }
+              await setDoc(userDocRef, pendingUpdates, { merge: true });
+              await fetch(`/api/billing/pending-fulfillment/${currentUser.uid}/ack`, { method: 'POST' });
+              setProfile((prev) => prev ? { ...prev, ...pendingUpdates } : prev);
+            }
+          }
+        } catch (pendingErr) {
+          console.warn('Pending webhook fulfillment check notice:', pendingErr);
+        }
       }
     } catch (err) {
       console.warn('Could not sync user profile with Firestore, using fallback:', err);
@@ -227,7 +260,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await signOut(auth);
     setProfile(null);
     try {
-      localStorage.removeItem('devforge_guest_profile_v2');
+      localStorage.removeItem(GUEST_STORAGE_KEY);
     } catch (e) {}
   };
 
