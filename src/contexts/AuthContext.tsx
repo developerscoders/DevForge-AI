@@ -10,6 +10,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../lib/firebase';
+import { isFirestoreQuotaExhausted, markFirestoreQuotaExhausted, isQuotaExhaustedError } from '../lib/firestoreService';
 
 export interface UserProfile {
   uid: string;
@@ -46,12 +47,55 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 const GUEST_STORAGE_KEY = (import.meta as any).env?.VITE_GUEST_STORAGE_KEY || 'devforge_guest_profile_v2';
 
+const getLocalProfile = (uid: string): UserProfile | null => {
+  try {
+    const raw = localStorage.getItem(`devforge_user_profile_${uid}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveLocalProfile = (uid: string, p: UserProfile) => {
+  try {
+    localStorage.setItem(`devforge_user_profile_${uid}`, JSON.stringify(p));
+  } catch {}
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   const syncUserProfile = async (currentUser: User) => {
+    const local = getLocalProfile(currentUser.uid);
+    if (isFirestoreQuotaExhausted()) {
+      if (local) {
+        setProfile(local);
+        return;
+      }
+      const defaultProfile: UserProfile = {
+        uid: currentUser.uid,
+        email: currentUser.email,
+        displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Engineer',
+        photoURL: currentUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.uid}`,
+        role: 'architect',
+        creditsRemaining: 500,
+        creditsTotal: 500,
+        planId: 'free',
+        planName: 'Free Tier',
+        billingCycle: 'monthly',
+        nextRenewal: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().split('T')[0],
+        referralCode: `DEV_${currentUser.uid.substring(0, 6).toUpperCase()}`,
+        referralsCount: 0,
+        referralBonus: 0,
+        createdAt: new Date().toISOString(),
+      };
+      saveLocalProfile(currentUser.uid, defaultProfile);
+      setProfile(defaultProfile);
+      return;
+    }
+
     try {
       const userDocRef = doc(db, 'users', currentUser.uid);
       const docSnap = await getDoc(userDocRef);
@@ -59,19 +103,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const nextMonth = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().split('T')[0];
 
       // Dynamically fetch Free plan definition from Firestore database
-      let dbFreeCredits = 0;
+      let dbFreeCredits = 500;
       let dbFreePlanName = 'Free Tier';
       try {
         const freePlanSnap = await getDoc(doc(db, 'plans', 'free'));
         if (freePlanSnap.exists()) {
           const d = freePlanSnap.data();
           if (typeof d.credits === 'number') dbFreeCredits = d.credits;
-          else dbFreeCredits = 0;
-
           if (d.name) dbFreePlanName = d.name;
         }
-      } catch (e) {
-        console.warn('Could not read free plan from Firestore:', e);
+      } catch (e: any) {
+        if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
       }
 
       if (!docSnap.exists()) {
@@ -92,23 +134,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           referralBonus: 0,
           createdAt: new Date().toISOString(),
         };
-        await setDoc(userDocRef, newProfile);
+        saveLocalProfile(currentUser.uid, newProfile);
+        try {
+          if (!isFirestoreQuotaExhausted()) {
+            await setDoc(userDocRef, newProfile);
+          }
+        } catch (e: any) {
+          if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+        }
         setProfile(newProfile);
       } else {
         const data = docSnap.data();
-        let creditsRemaining = data.creditsRemaining !== undefined ? data.creditsRemaining : 0;
-        let creditsTotal = data.creditsTotal !== undefined ? data.creditsTotal : 0;
-
-        // If an existing user document has 0/0 credits on the free tier, assign the credits from Firestore database
-        if (creditsRemaining === 0 && creditsTotal === 0 && (!data.planId || data.planId === 'free')) {
-          creditsRemaining = dbFreeCredits;
-          creditsTotal = dbFreeCredits;
-          try {
-            await setDoc(userDocRef, { creditsRemaining, creditsTotal }, { merge: true });
-          } catch (e) {
-            console.warn('Failed to update free tier credits in Firestore:', e);
-          }
-        }
+        let creditsRemaining = data.creditsRemaining !== undefined ? data.creditsRemaining : dbFreeCredits;
+        let creditsTotal = data.creditsTotal !== undefined ? data.creditsTotal : dbFreeCredits;
 
         const existingProfile: UserProfile = {
           uid: currentUser.uid,
@@ -127,6 +165,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           referralBonus: data.referralBonus || 0,
           createdAt: data.createdAt || new Date().toISOString(),
         };
+        saveLocalProfile(currentUser.uid, existingProfile);
         setProfile(existingProfile);
 
         // Check if any server-side webhook captured a payment for this user while they were offline/awaiting fulfillment
@@ -151,17 +190,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 pendingUpdates.billingCycle = f.billingCycle;
                 pendingUpdates.nextRenewal = nextRenewalDate;
               }
-              await setDoc(userDocRef, pendingUpdates, { merge: true });
+              if (!isFirestoreQuotaExhausted()) {
+                await setDoc(userDocRef, pendingUpdates, { merge: true });
+              }
               await fetch(`/api/billing/pending-fulfillment/${currentUser.uid}/ack`, { method: 'POST' });
-              setProfile((prev) => prev ? { ...prev, ...pendingUpdates } : prev);
+              const merged = { ...existingProfile, ...pendingUpdates };
+              saveLocalProfile(currentUser.uid, merged);
+              setProfile(merged);
             }
           }
-        } catch (pendingErr) {
-          console.warn('Pending webhook fulfillment check notice:', pendingErr);
-        }
+        } catch (pendingErr) {}
       }
-    } catch (err) {
-      console.warn('Could not sync user profile with Firestore, using fallback:', err);
+    } catch (err: any) {
+      if (isQuotaExhaustedError(err)) {
+        markFirestoreQuotaExhausted();
+      }
+      if (local) {
+        setProfile(local);
+      }
     }
   };
 
@@ -173,28 +219,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (currentUser) {
         await syncUserProfile(currentUser);
 
-        // Listen for real-time changes to user profile in Firestore
-        try {
-          const userDocRef = doc(db, 'users', currentUser.uid);
-          unsubsDoc = onSnapshot(
-            userDocRef,
-            (snap) => {
-              if (snap.exists()) {
-                setProfile(snap.data() as UserProfile);
+        // Listen for real-time changes to user profile in Firestore if quota allows
+        if (!isFirestoreQuotaExhausted()) {
+          try {
+            const userDocRef = doc(db, 'users', currentUser.uid);
+            unsubsDoc = onSnapshot(
+              userDocRef,
+              (snap) => {
+                if (snap.exists()) {
+                  const p = snap.data() as UserProfile;
+                  saveLocalProfile(currentUser.uid, p);
+                  setProfile(p);
+                }
+              },
+              (error: any) => {
+                if (isQuotaExhaustedError(error)) {
+                  markFirestoreQuotaExhausted();
+                }
               }
-            },
-            (error) => {
-              console.warn('User profile Firestore snapshot error:', error);
+            );
+          } catch (e: any) {
+            if (isQuotaExhaustedError(e)) {
+              markFirestoreQuotaExhausted();
             }
-          );
-        } catch (e) {}
+          }
+        }
         setLoading(false);
       } else {
         if (unsubsDoc) {
           unsubsDoc();
           unsubsDoc = null;
         }
-        // Unauthenticated visitor: profile is null
         setProfile(null);
         setLoading(false);
       }
@@ -205,6 +260,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubscribe();
     };
   }, []);
+
 
   const signInWithEmail = async (email: string, pass: string) => {
     await signInWithEmailAndPassword(auth, email, pass);
@@ -245,9 +301,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         referralBonus: 0,
         createdAt: new Date().toISOString(),
       };
+      saveLocalProfile(credential.user.uid, newProfile);
       try {
-        await setDoc(doc(db, 'users', credential.user.uid), newProfile);
-      } catch (e) {}
+        if (!isFirestoreQuotaExhausted()) {
+          await setDoc(doc(db, 'users', credential.user.uid), newProfile);
+        }
+      } catch (e: any) {
+        if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+      }
       setProfile(newProfile);
     }
   };
@@ -267,11 +328,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateUserCredits = async (deductAmount: number) => {
     if (!profile || !user) return;
     const newRemaining = Math.max(0, profile.creditsRemaining - deductAmount);
+    const updated = { ...profile, creditsRemaining: newRemaining };
+    saveLocalProfile(user.uid, updated);
+    setProfile(updated);
+
     try {
-      const userDocRef = doc(db, 'users', user.uid);
-      await setDoc(userDocRef, { creditsRemaining: newRemaining }, { merge: true });
-    } catch (e) {}
-    setProfile({ ...profile, creditsRemaining: newRemaining });
+      if (!isFirestoreQuotaExhausted()) {
+        const userDocRef = doc(db, 'users', user.uid);
+        await setDoc(userDocRef, { creditsRemaining: newRemaining }, { merge: true });
+      }
+    } catch (e: any) {
+      if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+    }
   };
 
   const updateUserSubscription = async (
@@ -303,25 +371,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       nextRenewal: nextRenewalDate,
     };
 
-    try {
-      const userDocRef = doc(db, 'users', user.uid);
-      await setDoc(
-        userDocRef,
-        {
-          planId,
-          planName,
-          billingCycle: cycle,
-          creditsRemaining: newCreditsRemaining,
-          creditsTotal: newCreditsTotal,
-          nextRenewal: nextRenewalDate,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
-    } catch (e) {
-      console.warn('Failed to update user profile in Firestore:', e);
-    }
+    saveLocalProfile(user.uid, updatedProfile);
     setProfile(updatedProfile);
+
+    try {
+      if (!isFirestoreQuotaExhausted()) {
+        const userDocRef = doc(db, 'users', user.uid);
+        await setDoc(
+          userDocRef,
+          {
+            planId,
+            planName,
+            billingCycle: cycle,
+            creditsRemaining: newCreditsRemaining,
+            creditsTotal: newCreditsTotal,
+            nextRenewal: nextRenewalDate,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      }
+    } catch (e: any) {
+      if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+    }
   };
 
   const refreshProfile = async () => {

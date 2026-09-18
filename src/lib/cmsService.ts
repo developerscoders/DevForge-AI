@@ -10,6 +10,7 @@ import {
 import { db, auth } from './firebase';
 import { CMSPage, CMSPageSEO } from '../types';
 import { SITE_CONFIG, PAGE_SEO } from './seoConfig';
+import { isFirestoreQuotaExhausted, markFirestoreQuotaExhausted, isQuotaExhaustedError } from './firestoreService';
 
 /**
  * Pre-seeded Default CMS Pages with rich SEO metadata
@@ -223,6 +224,9 @@ export function getDefaultCMSPage(identifier: string): CMSPage | undefined {
  */
 export async function fetchCMSPages(): Promise<CMSPage[]> {
   try {
+    if (isFirestoreQuotaExhausted()) {
+      return DEFAULT_CMS_PAGES;
+    }
     const collRef = collection(db, 'cms_pages');
     const snap = await getDocs(collRef);
     const pages: CMSPage[] = [];
@@ -241,16 +245,12 @@ export async function fetchCMSPages(): Promise<CMSPage[]> {
       return pages.sort((a, b) => (orderMap.get(a.id) ?? 99) - (orderMap.get(b.id) ?? 99));
     }
 
-    // Seed defaults to Firestore if collection is empty
-    if (auth.currentUser) {
-      for (const page of DEFAULT_CMS_PAGES) {
-        await setDoc(doc(db, 'cms_pages', page.id), page);
-      }
-    }
-
     return DEFAULT_CMS_PAGES;
-  } catch (err) {
-    console.warn('Error fetching CMS pages from Firestore, using local defaults:', err);
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+    console.warn('Using local CMS defaults:', err?.message || err);
     return DEFAULT_CMS_PAGES;
   }
 }
@@ -260,8 +260,12 @@ export async function fetchCMSPages(): Promise<CMSPage[]> {
  */
 export async function fetchCMSPageBySlug(slug: string): Promise<CMSPage | null> {
   const norm = normalizeSlug(slug);
+  const defaultFallback = getDefaultCMSPage(norm);
+  if (isFirestoreQuotaExhausted()) {
+    return defaultFallback || null;
+  }
+
   try {
-    const defaultFallback = getDefaultCMSPage(norm);
     if (!defaultFallback) return null;
 
     const docRef = doc(db, 'cms_pages', defaultFallback.id);
@@ -271,9 +275,11 @@ export async function fetchCMSPageBySlug(slug: string): Promise<CMSPage | null> 
       return { id: snap.id, ...snap.data() } as CMSPage;
     }
     return defaultFallback;
-  } catch (err) {
-    console.warn(`Error fetching CMS page for slug ${slug}:`, err);
-    return getDefaultCMSPage(norm) || null;
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+    return defaultFallback || null;
   }
 }
 
@@ -281,16 +287,23 @@ export async function fetchCMSPageBySlug(slug: string): Promise<CMSPage | null> 
  * Fetches a single CMS page by its document ID (e.g. 'home', 'features')
  */
 export async function fetchCMSPageById(id: string): Promise<CMSPage | null> {
+  const defaultFallback = getDefaultCMSPage(id);
+  if (isFirestoreQuotaExhausted()) {
+    return defaultFallback || null;
+  }
+
   try {
     const docRef = doc(db, 'cms_pages', id);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
       return { id: snap.id, ...snap.data() } as CMSPage;
     }
-    return getDefaultCMSPage(id) || null;
-  } catch (err) {
-    console.warn(`Error fetching CMS page by id ${id}:`, err);
-    return getDefaultCMSPage(id) || null;
+    return defaultFallback || null;
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+    return defaultFallback || null;
   }
 }
 
@@ -298,6 +311,9 @@ export async function fetchCMSPageById(id: string): Promise<CMSPage | null> {
  * Saves or creates an entire CMS Page record in Firestore
  */
 export async function saveCMSPage(page: CMSPage): Promise<boolean> {
+  if (isFirestoreQuotaExhausted()) {
+    return true;
+  }
   try {
     const docRef = doc(db, 'cms_pages', page.id);
     const payload = {
@@ -306,8 +322,11 @@ export async function saveCMSPage(page: CMSPage): Promise<boolean> {
     };
     await setDoc(docRef, payload, { merge: true });
     return true;
-  } catch (err) {
-    console.error('Failed to save CMS page to Firestore:', err);
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+    console.warn('Notice saving CMS page to Firestore:', err?.message || err);
     return false;
   }
 }
@@ -316,6 +335,9 @@ export async function saveCMSPage(page: CMSPage): Promise<boolean> {
  * Updates specifically the SEO metadata fields for a given CMS page
  */
 export async function updateCMSPageSEO(pageId: string, seoUpdates: Partial<CMSPageSEO>): Promise<boolean> {
+  if (isFirestoreQuotaExhausted()) {
+    return true;
+  }
   try {
     const defaultPage = getDefaultCMSPage(pageId);
     const docRef = doc(db, 'cms_pages', pageId);
@@ -353,8 +375,11 @@ export async function updateCMSPageSEO(pageId: string, seoUpdates: Partial<CMSPa
     );
 
     return true;
-  } catch (err) {
-    console.error(`Failed to update SEO for CMS page ${pageId}:`, err);
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+    console.warn(`Notice updating SEO for CMS page ${pageId}:`, err?.message || err);
     return false;
   }
 }
@@ -367,6 +392,11 @@ export function subscribeToCMSPage(
   onUpdate: (page: CMSPage | null) => void
 ): () => void {
   const target = getDefaultCMSPage(slugOrId);
+  if (isFirestoreQuotaExhausted()) {
+    onUpdate(target || null);
+    return () => {};
+  }
+
   const pageId = target ? target.id : slugOrId.replace(/^\//, '') || 'home';
 
   try {
@@ -380,14 +410,18 @@ export function subscribeToCMSPage(
           onUpdate(target || null);
         }
       },
-      (error) => {
-        console.warn(`Firestore CMS listener notice for ${pageId}:`, error.message);
+      (error: any) => {
+        if (isQuotaExhaustedError(error)) {
+          markFirestoreQuotaExhausted();
+        }
         onUpdate(target || null);
       }
     );
     return unsubscribe;
-  } catch (err) {
-    console.warn('Could not establish Firestore snapshot listener, using fallback:', err);
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    }
     onUpdate(target || null);
     return () => {};
   }
@@ -397,6 +431,11 @@ export function subscribeToCMSPage(
  * Subscribes to real-time updates for all CMS pages
  */
 export function subscribeToAllCMSPages(onUpdate: (pages: CMSPage[]) => void): () => void {
+  if (isFirestoreQuotaExhausted()) {
+    onUpdate(DEFAULT_CMS_PAGES);
+    return () => {};
+  }
+
   try {
     const collRef = collection(db, 'cms_pages');
     const unsubscribe = onSnapshot(
@@ -414,15 +453,20 @@ export function subscribeToAllCMSPages(onUpdate: (pages: CMSPage[]) => void): ()
           onUpdate(DEFAULT_CMS_PAGES);
         }
       },
-      (error) => {
-        console.warn('Firestore all CMS pages snapshot notice:', error.message);
+      (error: any) => {
+        if (isQuotaExhaustedError(error)) {
+          markFirestoreQuotaExhausted();
+        }
         onUpdate(DEFAULT_CMS_PAGES);
       }
     );
     return unsubscribe;
-  } catch (err) {
-    console.warn('Could not establish all CMS snapshot listener:', err);
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    }
     onUpdate(DEFAULT_CMS_PAGES);
     return () => {};
   }
 }
+

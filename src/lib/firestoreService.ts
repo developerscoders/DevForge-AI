@@ -101,10 +101,149 @@ export const fetchFirestoreAdminTransactions = async (): Promise<Transaction[]> 
 };
 
 // ==========================================
+// Firestore Quota Circuit Breaker & Fallback
+// ==========================================
+const QUOTA_STORAGE_KEY = 'devforge_firestore_quota_exhausted_v2';
+const QUOTA_EXPIRY_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+export const isFirestoreQuotaExhausted = (): boolean => {
+  try {
+    const val = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (!val) return false;
+    const timestamp = Number(val);
+    if (isNaN(timestamp) || Date.now() - timestamp > QUOTA_EXPIRY_MS) {
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const markFirestoreQuotaExhausted = () => {
+  try {
+    localStorage.setItem(QUOTA_STORAGE_KEY, String(Date.now()));
+    console.warn('[DevForge SRE] Firestore write quota metric exceeded. Switched persistence to local client storage engine.');
+  } catch {}
+};
+
+export const clearFirestoreQuotaFlag = () => {
+  try {
+    localStorage.removeItem(QUOTA_STORAGE_KEY);
+  } catch {}
+};
+
+export function isQuotaExhaustedError(err: any): boolean {
+  if (!err) return false;
+  const code = err?.code || '';
+  const msg = String(err?.message || err);
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded') ||
+    msg.includes('Free daily write units')
+  );
+}
+
+async function safeFirestoreSetDoc(docRef: any, data: any, options?: any): Promise<boolean> {
+  if (isFirestoreQuotaExhausted()) return false;
+  try {
+    if (options) {
+      await setDoc(docRef, data, options);
+    } else {
+      await setDoc(docRef, data);
+    }
+    return true;
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    } else {
+      console.warn('[Firestore SetDoc Warning]:', err?.message || err);
+    }
+    return false;
+  }
+}
+
+async function safeFirestoreUpdateDoc(docRef: any, data: any): Promise<boolean> {
+  if (isFirestoreQuotaExhausted()) return false;
+  try {
+    await updateDoc(docRef, data);
+    return true;
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    } else {
+      console.warn('[Firestore UpdateDoc Warning]:', err?.message || err);
+    }
+    return false;
+  }
+}
+
+async function safeFirestoreDeleteDoc(docRef: any): Promise<boolean> {
+  if (isFirestoreQuotaExhausted()) return false;
+  try {
+    await deleteDoc(docRef);
+    return true;
+  } catch (err: any) {
+    if (isQuotaExhaustedError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+    return false;
+  }
+}
+
+// Local storage mirrors for offline / quota resilient operation
+const LOCAL_PROJECTS_KEY = 'devforge_local_projects_v2';
+const LOCAL_TRANSACTIONS_KEY = 'devforge_local_transactions_v2';
+
+export const getLocalStoredProjects = (userId?: string): Project[] => {
+  try {
+    const raw = localStorage.getItem(LOCAL_PROJECTS_KEY);
+    if (!raw) return [];
+    const list: Project[] = JSON.parse(raw);
+    if (!Array.isArray(list)) return [];
+    if (userId) {
+      return list.filter(p => !p.userId || p.userId === userId);
+    }
+    return list;
+  } catch {
+    return [];
+  }
+};
+
+export const saveLocalStoredProject = (project: Project, userId?: string) => {
+  try {
+    const list = getLocalStoredProjects();
+    const currentUid = auth.currentUser?.uid || userId || project.userId;
+    const updatedProject = { ...project, userId: currentUid, updatedAt: new Date().toISOString() };
+    const existingIndex = list.findIndex(p => p.id === project.id);
+    if (existingIndex >= 0) {
+      list[existingIndex] = updatedProject;
+    } else {
+      list.unshift(updatedProject);
+    }
+    localStorage.setItem(LOCAL_PROJECTS_KEY, JSON.stringify(list));
+  } catch (e) {
+    console.warn('Could not cache project locally:', e);
+  }
+};
+
+export const removeLocalStoredProject = (projectId: string) => {
+  try {
+    const list = getLocalStoredProjects();
+    const filtered = list.filter(p => p.id !== projectId);
+    localStorage.setItem(LOCAL_PROJECTS_KEY, JSON.stringify(filtered));
+  } catch {}
+};
+
+// ==========================================
 // 1. Subscription Plans Firestore Operations
 // ==========================================
 export const fetchFirestorePlans = async (): Promise<SubscriptionPlan[]> => {
   try {
+    if (isFirestoreQuotaExhausted()) return [];
     const coll = collection(db, 'plans');
     const snap = await getDocs(coll);
     const plans: SubscriptionPlan[] = [];
@@ -114,19 +253,19 @@ export const fetchFirestorePlans = async (): Promise<SubscriptionPlan[]> => {
 
     // Natural sort by priceMonthly ascending: Free, Starter, Pro, Enterprise
     return plans.sort((a, b) => (a.priceMonthly || 0) - (b.priceMonthly || 0));
-  } catch (e) {
-    console.error('Error reading plans from Firestore database:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return [];
   }
 };
 
 export const saveFirestorePlan = async (plan: SubscriptionPlan) => {
   try {
-    if (!auth.currentUser) return;
+    if (!auth.currentUser || isFirestoreQuotaExhausted()) return;
     const docRef = doc(db, 'plans', plan.id);
-    await setDoc(docRef, plan, { merge: true });
+    await safeFirestoreSetDoc(docRef, plan, { merge: true });
   } catch (e) {
-    console.warn('Error saving plan to Firestore:', e);
+    console.warn('Error saving plan:', e);
   }
 };
 
@@ -135,6 +274,7 @@ export const saveFirestorePlan = async (plan: SubscriptionPlan) => {
 // ==========================================
 export const fetchFirestoreCoupons = async (): Promise<Coupon[]> => {
   try {
+    if (isFirestoreQuotaExhausted()) return [];
     const coll = collection(db, 'coupons');
     const snap = await getDocs(coll);
     const coupons: Coupon[] = [];
@@ -142,19 +282,19 @@ export const fetchFirestoreCoupons = async (): Promise<Coupon[]> => {
       coupons.push(d.data() as Coupon);
     });
     return coupons;
-  } catch (e) {
-    console.error('Error reading coupons from Firestore database:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return [];
   }
 };
 
 export const saveFirestoreCoupon = async (coupon: Coupon) => {
   try {
-    if (!auth.currentUser) return;
+    if (!auth.currentUser || isFirestoreQuotaExhausted()) return;
     const docRef = doc(db, 'coupons', coupon.code.toUpperCase());
-    await setDoc(docRef, { ...coupon, code: coupon.code.toUpperCase() }, { merge: true });
+    await safeFirestoreSetDoc(docRef, { ...coupon, code: coupon.code.toUpperCase() }, { merge: true });
   } catch (e) {
-    console.warn('Error saving coupon to Firestore:', e);
+    console.warn('Error saving coupon:', e);
   }
 };
 
@@ -162,68 +302,110 @@ export const saveFirestoreCoupon = async (coupon: Coupon) => {
 // 3. Projects Firestore Operations
 // ==========================================
 export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]> => {
+  const localList = getLocalStoredProjects(userId);
+
+  if (isFirestoreQuotaExhausted()) {
+    return localList;
+  }
+
   try {
     const coll = collection(db, 'projects');
     const q = userId ? query(coll, where('userId', '==', userId)) : coll;
     const snap = await getDocs(q);
-    const results: Project[] = [];
+    const firestoreList: Project[] = [];
     snap.forEach((d) => {
-      results.push({ id: d.id, ...d.data() } as Project);
+      firestoreList.push({ id: d.id, ...d.data() } as Project);
     });
-    return results.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-  } catch (e) {
-    console.warn('Error fetching projects from Firestore:', e);
-    return [];
+
+    // Merge Firestore with local: If local has a newer version or unsynced project, keep it!
+    const map = new Map<string, Project>();
+    for (const p of firestoreList) {
+      map.set(p.id, p);
+    }
+    for (const p of localList) {
+      const existing = map.get(p.id);
+      if (!existing || new Date(p.updatedAt || 0).getTime() > new Date(existing.updatedAt || 0).getTime()) {
+        map.set(p.id, p);
+      }
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+    console.warn('Returning local projects storage:', e?.message || e);
+    return localList;
   }
 };
 
 export const fetchFirestoreProjectById = async (projectId: string): Promise<Project | null> => {
+  const localList = getLocalStoredProjects();
+  const local = localList.find((p) => p.id === projectId) || null;
+
+  if (isFirestoreQuotaExhausted()) {
+    return local;
+  }
+
   try {
     const docRef = doc(db, 'projects', projectId);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
-      return { id: snap.id, ...snap.data() } as Project;
+      const remote = { id: snap.id, ...snap.data() } as Project;
+      if (local && new Date(local.updatedAt || 0).getTime() > new Date(remote.updatedAt || 0).getTime()) {
+        return local;
+      }
+      return remote;
     }
-    return null;
-  } catch (e) {
-    console.warn('Error fetching project by id from Firestore:', e);
-    return null;
+    return local;
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+    return local;
   }
 };
 
 export const saveFirestoreProject = async (project: Project, userId?: string) => {
+  // Always save locally so project data is 100% durable
+  saveLocalStoredProject(project, userId);
+
+  const currentUid = auth.currentUser?.uid || userId || project.userId;
+  if (!currentUid || isFirestoreQuotaExhausted()) {
+    return;
+  }
+
   try {
-    const currentUid = auth.currentUser?.uid || userId;
-    if (!currentUid) {
-      console.warn('Skipping Firestore save: user not authenticated');
-      return;
-    }
     const docRef = doc(db, 'projects', project.id);
-    await setDoc(docRef, { ...project, userId: currentUid, updatedAt: new Date().toISOString() }, { merge: true });
-  } catch (e) {
-    console.warn('Error saving project to Firestore:', e);
+    await safeFirestoreSetDoc(docRef, { ...project, userId: currentUid, updatedAt: new Date().toISOString() }, { merge: true });
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
 export const deleteFirestoreProject = async (projectId: string) => {
+  removeLocalStoredProject(projectId);
+  if (isFirestoreQuotaExhausted() || !auth.currentUser) return;
   try {
     const docRef = doc(db, 'projects', projectId);
-    await deleteDoc(docRef);
-  } catch (e) {
-    console.warn('Error deleting project from Firestore:', e);
+    await safeFirestoreDeleteDoc(docRef);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
 export const updateFirestoreProjectFiles = async (projectId: string, files: FileNode[]) => {
+  const localList = getLocalStoredProjects();
+  const existing = localList.find((p) => p.id === projectId);
+  if (existing) {
+    existing.files = files;
+    existing.updatedAt = new Date().toISOString();
+    saveLocalStoredProject(existing);
+  }
+
+  if (isFirestoreQuotaExhausted() || !auth.currentUser) return;
   try {
-    if (!auth.currentUser) {
-      console.warn('Skipping Firestore file update: user not authenticated');
-      return;
-    }
     const docRef = doc(db, 'projects', projectId);
-    await updateDoc(docRef, { files, updatedAt: new Date().toISOString() });
-  } catch (e) {
-    console.warn('Error updating project files in Firestore:', e);
+    await safeFirestoreUpdateDoc(docRef, { files, updatedAt: new Date().toISOString() });
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
@@ -231,12 +413,20 @@ export const updateFirestoreProjectDetails = async (
   projectId: string,
   updates: Partial<Pick<Project, 'name' | 'description' | 'status' | 'deployedUrl'>>
 ) => {
+  const localList = getLocalStoredProjects();
+  const existing = localList.find((p) => p.id === projectId);
+  if (existing) {
+    Object.assign(existing, updates);
+    existing.updatedAt = new Date().toISOString();
+    saveLocalStoredProject(existing);
+  }
+
+  if (isFirestoreQuotaExhausted() || !auth.currentUser) return;
   try {
-    if (!auth.currentUser) return;
     const docRef = doc(db, 'projects', projectId);
-    await updateDoc(docRef, { ...updates, updatedAt: new Date().toISOString() });
-  } catch (e) {
-    console.warn('Error updating project details in Firestore:', e);
+    await safeFirestoreUpdateDoc(docRef, { ...updates, updatedAt: new Date().toISOString() });
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
@@ -244,9 +434,9 @@ export const updateFirestoreProjectDetails = async (
 export const recordFirestoreProjectExport = async (project: Project, format: 'zip' | 'json') => {
   try {
     const currentUid = auth.currentUser?.uid;
-    if (!currentUid) return;
+    if (!currentUid || isFirestoreQuotaExhausted()) return;
     const exportId = `exp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await setDoc(doc(db, 'projects', project.id, 'exports', exportId), {
+    await safeFirestoreSetDoc(doc(db, 'projects', project.id, 'exports', exportId), {
       id: exportId,
       projectId: project.id,
       userId: currentUid,
@@ -254,24 +444,41 @@ export const recordFirestoreProjectExport = async (project: Project, format: 'zi
       fileCount: project.files?.length || 0,
       exportedAt: new Date().toISOString(),
     });
-  } catch (e) {
-    console.warn('Error recording project export in Firestore:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
 export const listenToFirestoreProject = (projectId: string, onUpdate: (project: Project) => void) => {
-  const docRef = doc(db, 'projects', projectId);
-  return onSnapshot(
-    docRef,
-    (snap) => {
-      if (snap.exists()) {
-        onUpdate({ id: snap.id, ...snap.data() } as Project);
+  if (isFirestoreQuotaExhausted()) {
+    const local = getLocalStoredProjects().find((p) => p.id === projectId);
+    if (local) onUpdate(local);
+    return () => {};
+  }
+
+  try {
+    const docRef = doc(db, 'projects', projectId);
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          onUpdate({ id: snap.id, ...snap.data() } as Project);
+        }
+      },
+      (error: any) => {
+        if (isQuotaExhaustedError(error)) {
+          markFirestoreQuotaExhausted();
+          const local = getLocalStoredProjects().find((p) => p.id === projectId);
+          if (local) onUpdate(local);
+        }
       }
-    },
-    (error) => {
-      console.warn('Firestore snapshot listener error for project:', error);
-    }
-  );
+    );
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+    const local = getLocalStoredProjects().find((p) => p.id === projectId);
+    if (local) onUpdate(local);
+    return () => {};
+  }
 };
 
 // ==========================================
@@ -280,32 +487,49 @@ export const listenToFirestoreProject = (projectId: string, onUpdate: (project: 
 export const saveFirestoreTransaction = async (tx: Transaction, userId?: string) => {
   try {
     const currentUid = auth.currentUser?.uid || userId;
-    if (!currentUid) {
-      console.warn('Skipping transaction save to Firestore: user not authenticated');
-      return;
-    }
+    // Local persistence for transactions
+    try {
+      const raw = localStorage.getItem(LOCAL_TRANSACTIONS_KEY);
+      const list: Transaction[] = raw ? JSON.parse(raw) : [];
+      list.unshift(tx);
+      localStorage.setItem(LOCAL_TRANSACTIONS_KEY, JSON.stringify(list));
+    } catch {}
+
+    if (!currentUid || isFirestoreQuotaExhausted()) return;
     const docRef = doc(db, 'transactions', tx.id);
-    await setDoc(docRef, { ...tx, userId: currentUid, createdAt: new Date().toISOString() }, { merge: true });
-  } catch (e) {
-    console.warn('Error saving transaction in Firestore:', e);
+    await safeFirestoreSetDoc(docRef, { ...tx, userId: currentUid, createdAt: new Date().toISOString() }, { merge: true });
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
 export const fetchFirestoreTransactions = async (userId?: string): Promise<Transaction[]> => {
+  let localTxs: Transaction[] = [];
+  try {
+    const raw = localStorage.getItem(LOCAL_TRANSACTIONS_KEY);
+    if (raw) localTxs = JSON.parse(raw);
+  } catch {}
+
+  if (isFirestoreQuotaExhausted()) return localTxs;
+
   try {
     const currentUid = auth.currentUser?.uid || userId;
-    if (!currentUid) {
-      return [];
-    }
+    if (!currentUid) return localTxs;
     const coll = collection(db, 'transactions');
     const q = query(coll, where('userId', '==', currentUid));
     const snap = await getDocs(q);
     const txs: Transaction[] = [];
     snap.forEach((d) => txs.push({ id: d.id, ...d.data() } as Transaction));
-    return txs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  } catch (e) {
-    console.warn('Error fetching transactions from Firestore:', e);
-    return [];
+    
+    // Merge
+    const map = new Map<string, Transaction>();
+    for (const t of txs) map.set(t.id, t);
+    for (const t of localTxs) if (!map.has(t.id)) map.set(t.id, t);
+
+    return Array.from(map.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+    return localTxs;
   }
 };
 
@@ -314,12 +538,13 @@ export const fetchFirestoreTransactions = async (userId?: string): Promise<Trans
 // ==========================================
 export const fetchFirestoreMarketplaceProducts = async (): Promise<MarketplaceProduct[]> => {
   try {
+    if (isFirestoreQuotaExhausted()) return [];
     const snap = await getDocs(collection(db, 'marketplace_products'));
     const products: MarketplaceProduct[] = [];
     snap.forEach((d) => products.push({ id: d.id, ...d.data() } as MarketplaceProduct));
     return products;
-  } catch (e) {
-    console.error('Error fetching marketplace products from Firestore database:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return [];
   }
 };
@@ -327,41 +552,40 @@ export const fetchFirestoreMarketplaceProducts = async (): Promise<MarketplacePr
 export const saveFirestoreMarketplaceProduct = async (product: MarketplaceProduct, userId?: string) => {
   try {
     const currentUid = auth.currentUser?.uid || userId;
-    if (!currentUid) {
-      console.warn('Skipping marketplace product Firestore save: user not authenticated');
-      return;
-    }
+    if (!currentUid || isFirestoreQuotaExhausted()) return;
     const docRef = doc(db, 'marketplace_products', product.id);
-    await setDoc(docRef, {
-      ...product,
-      authorId: currentUid,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
-  } catch (e) {
-    console.warn('Error saving marketplace product to Firestore:', e);
+    await safeFirestoreSetDoc(
+      docRef,
+      {
+        ...product,
+        authorId: currentUid,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
 export const updateFirestoreProductStats = async (productId: string, price: number) => {
   try {
-    if (!auth.currentUser) {
-      return;
-    }
+    if (!auth.currentUser || isFirestoreQuotaExhausted()) return;
     const docRef = doc(db, 'marketplace_products', productId);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
       const data = snap.data();
       const currentDownloads = data.downloads || 0;
       const currentEarnings = data.earnings || 0;
-      await updateDoc(docRef, {
+      await safeFirestoreUpdateDoc(docRef, {
         downloads: currentDownloads + 1,
         earnings: currentEarnings + price,
         updatedAt: new Date().toISOString(),
       });
     }
-  } catch (e) {
-    console.warn('Error updating marketplace product stats:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
@@ -371,10 +595,10 @@ export const recordFirestoreMarketplacePurchase = async (
   paymentId?: string
 ) => {
   try {
-    if (!auth.currentUser) return;
+    if (!auth.currentUser || isFirestoreQuotaExhausted()) return;
     const purchaseId = `pur_${Math.random().toString(36).substring(2, 9)}`;
     const purchaseRef = doc(db, 'marketplace_purchases', purchaseId);
-    await setDoc(purchaseRef, {
+    await safeFirestoreSetDoc(purchaseRef, {
       id: purchaseId,
       userId,
       productId: product.id,
@@ -401,8 +625,8 @@ export const recordFirestoreMarketplacePurchase = async (
 
     // Update product download and revenue statistics in database
     await updateFirestoreProductStats(product.id, product.price);
-  } catch (e) {
-    console.warn('Error recording marketplace purchase in Firestore:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
 };
 
@@ -411,18 +635,17 @@ export const recordFirestoreMarketplacePurchase = async (
 // ==========================================
 export const fetchFirestoreTeamMembers = async (userId?: string): Promise<TeamMember[]> => {
   try {
+    if (isFirestoreQuotaExhausted()) return [];
     const currentUid = auth.currentUser?.uid || userId;
-    if (!currentUid) {
-      return [];
-    }
+    if (!currentUid) return [];
     const coll = collection(db, 'team_members');
     const q = query(coll, where('ownerId', '==', currentUid));
     const snap = await getDocs(q);
     const members: TeamMember[] = [];
     snap.forEach((d) => members.push({ id: d.id, ...d.data() } as TeamMember));
     return members;
-  } catch (e) {
-    console.warn('Error fetching team members from Firestore:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return [];
   }
 };
@@ -436,11 +659,12 @@ export const saveFirestoreTeamMember = async (member: Omit<TeamMember, 'id'>, us
       id: memberId,
       ...member,
     };
+    if (isFirestoreQuotaExhausted()) return fullMember;
     const docRef = doc(db, 'team_members', memberId);
-    await setDoc(docRef, { ...fullMember, ownerId: currentUid });
+    await safeFirestoreSetDoc(docRef, { ...fullMember, ownerId: currentUid });
     return fullMember;
-  } catch (e) {
-    console.warn('Error saving team member to Firestore:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return null;
   }
 };
@@ -455,14 +679,7 @@ export const updateFirestoreUserSubscription = async (
   extraCredits = 0
 ) => {
   try {
-    const userRef = doc(db, 'users', userId);
-    const snap = await getDoc(userRef);
-    const existing = snap.exists() ? snap.data() : {};
-
-    const currentRemaining = existing.creditsRemaining || 0;
-    const currentTotal = existing.creditsTotal || 0;
     const addedCredits = plan.credits + extraCredits;
-
     const nextRenewalDate = new Date(Date.now() + (cycle === 'yearly' ? 365 : 30) * 24 * 3600 * 1000)
       .toISOString()
       .split('T')[0];
@@ -471,16 +688,33 @@ export const updateFirestoreUserSubscription = async (
       planId: plan.id,
       planName: plan.name,
       billingCycle: cycle,
-      creditsRemaining: currentRemaining + addedCredits,
-      creditsTotal: currentTotal + addedCredits,
+      creditsRemaining: addedCredits,
+      creditsTotal: addedCredits,
       nextRenewal: nextRenewalDate,
       updatedAt: new Date().toISOString(),
     };
 
-    await setDoc(userRef, updatedData, { merge: true });
-    return updatedData;
-  } catch (e) {
-    console.warn('Error updating user subscription in Firestore:', e);
+    if (isFirestoreQuotaExhausted()) {
+      return updatedData;
+    }
+
+    const userRef = doc(db, 'users', userId);
+    const snap = await getDoc(userRef);
+    const existing = snap.exists() ? snap.data() : {};
+
+    const currentRemaining = existing.creditsRemaining || 0;
+    const currentTotal = existing.creditsTotal || 0;
+
+    const fullData = {
+      ...updatedData,
+      creditsRemaining: currentRemaining + addedCredits,
+      creditsTotal: currentTotal + addedCredits,
+    };
+
+    await safeFirestoreSetDoc(userRef, fullData, { merge: true });
+    return fullData;
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return null;
   }
 };
@@ -564,6 +798,9 @@ export const DEFAULT_DATABASE_TEMPLATES: BlueprintTemplate[] = [
 ];
 
 export const fetchFirestoreTemplates = async (): Promise<BlueprintTemplate[]> => {
+  if (isFirestoreQuotaExhausted()) {
+    return DEFAULT_DATABASE_TEMPLATES;
+  }
   try {
     const coll = collection(db, 'templates');
     const snap = await getDocs(coll);
@@ -573,32 +810,26 @@ export const fetchFirestoreTemplates = async (): Promise<BlueprintTemplate[]> =>
     });
 
     if (list.length === 0) {
-      // Seed default templates directly to Firestore database
-      for (const t of DEFAULT_DATABASE_TEMPLATES) {
-        try {
-          await setDoc(doc(db, 'templates', t.id), t);
-          list.push(t);
-        } catch (seedErr) {
-          console.warn('Notice seeding template to Firestore:', seedErr);
-        }
-      }
+      return DEFAULT_DATABASE_TEMPLATES;
     }
     return list;
-  } catch (e) {
-    console.error('Error fetching templates from Firestore database:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return DEFAULT_DATABASE_TEMPLATES;
   }
 };
 
 export const saveFirestoreTemplate = async (template: BlueprintTemplate) => {
   try {
+    if (isFirestoreQuotaExhausted()) return false;
     const docRef = doc(db, 'templates', template.id);
-    await setDoc(docRef, template, { merge: true });
+    await safeFirestoreSetDoc(docRef, template, { merge: true });
     return true;
-  } catch (e) {
-    console.warn('Error saving template to Firestore:', e);
+  } catch (e: any) {
+    if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return false;
   }
 };
+
 
 

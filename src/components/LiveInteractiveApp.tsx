@@ -25,7 +25,13 @@ import {
   X as MultiplyIcon,
   Minus,
   Percent,
-  Delete
+  Delete,
+  Layers,
+  Tag,
+  User,
+  Server,
+  Database,
+  ShieldCheck
 } from 'lucide-react';
 
 interface LiveInteractiveAppProps {
@@ -34,42 +40,54 @@ interface LiveInteractiveAppProps {
 
 export default function LiveInteractiveApp({ project }: LiveInteractiveAppProps) {
   const promptText = (project.prompt || project.name || '').toLowerCase();
+
+  const isTaskFlowOrMern =
+    promptText.includes('taskflow') ||
+    promptText.includes('mern') ||
+    promptText.includes('kanban') ||
+    promptText.includes('project management') ||
+    promptText.includes('sprint') ||
+    promptText.includes('board') ||
+    promptText.includes('task') ||
+    promptText.includes('ticket');
+
   const isCalculator =
     promptText.includes('calc') ||
     promptText.includes('math') ||
     promptText.includes('arithmetic');
-  const isTodo =
-    promptText.includes('todo') ||
-    promptText.includes('task') ||
-    promptText.includes('checklist') ||
-    promptText.includes('kanban');
+
   const isNotes =
     promptText.includes('note') ||
     promptText.includes('journal') ||
     promptText.includes('scratchpad') ||
     promptText.includes('docs');
+
   const isWeather =
     promptText.includes('weather') ||
     promptText.includes('forecast') ||
     promptText.includes('climate');
+
   const isEcommerce =
     promptText.includes('shop') ||
     promptText.includes('store') ||
     promptText.includes('ecommerce') ||
     promptText.includes('cart') ||
     promptText.includes('product');
-  const isRestaurant = /restaurant|dining|culinary|chef|tasting menu|reservation/.test(promptText);
 
-  if (isRestaurant) {
-    return <InteractiveRestaurant appName={project.name} />;
+  const isRestaurant =
+    !isTaskFlowOrMern &&
+    (promptText.includes('restaurant') ||
+      promptText.includes('fine dining') ||
+      promptText.includes('bistro') ||
+      promptText.includes('culinary') ||
+      promptText.includes('table reservation'));
+
+  if (isTaskFlowOrMern) {
+    return <InteractiveTaskFlowApp project={project} />;
   }
 
   if (isCalculator) {
     return <InteractiveCalculator appName={project.name} />;
-  }
-
-  if (isTodo) {
-    return <InteractiveTodoList appName={project.name} prompt={project.prompt} />;
   }
 
   if (isNotes) {
@@ -84,9 +102,425 @@ export default function LiveInteractiveApp({ project }: LiveInteractiveAppProps)
     return <InteractiveStorefront appName={project.name} prompt={project.prompt} />;
   }
 
+  if (isRestaurant) {
+    return <InteractiveRestaurant appName={project.name} />;
+  }
+
   // General dynamic interactive web application
   return <InteractiveDynamicApp project={project} />;
 }
+
+interface TaskFlowTicket {
+  id: string;
+  title: string;
+  category: string;
+  status: 'backlog' | 'todo' | 'in_progress' | 'review' | 'done';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  assignee: string;
+  timeEstimate: string;
+}
+
+function InteractiveTaskFlowApp({ project }: { project: Project }) {
+  const [activeTab, setActiveTab] = useState<'board' | 'api' | 'telemetry'>('board');
+  const [priorityFilter, setPriorityFilter] = useState<string>('all');
+  const [tickets, setTickets] = useState<TaskFlowTicket[]>([
+    {
+      id: 'tf-101',
+      title: 'Initialize MongoDB connection pool with auto-reconnect backoff',
+      category: 'Database',
+      status: 'done',
+      priority: 'high',
+      assignee: 'Devon SRE',
+      timeEstimate: '3h'
+    },
+    {
+      id: 'tf-102',
+      title: 'Enforce JWT authentication middleware & HTTP-only cookies',
+      category: 'Security',
+      status: 'review',
+      priority: 'urgent',
+      assignee: 'Frank Lead',
+      timeEstimate: '4h'
+    },
+    {
+      id: 'tf-103',
+      title: 'Build drag-and-drop Kanban state controller with optimistic UI',
+      category: 'Frontend',
+      status: 'in_progress',
+      priority: 'high',
+      assignee: 'Sophia Arch',
+      timeEstimate: '6h'
+    },
+    {
+      id: 'tf-104',
+      title: 'Implement REST endpoints: GET /api/tasks & POST /api/tasks',
+      category: 'API Engine',
+      status: 'todo',
+      priority: 'medium',
+      assignee: 'Parker PM',
+      timeEstimate: '2h'
+    },
+    {
+      id: 'tf-105',
+      title: 'Write automated unit test assertions with Vitest for controllers',
+      category: 'QA / Testing',
+      status: 'todo',
+      priority: 'medium',
+      assignee: 'Quinn QA',
+      timeEstimate: '5h'
+    },
+    {
+      id: 'tf-106',
+      title: 'Dockerize full-stack container & configure reverse proxy',
+      category: 'DevOps',
+      status: 'backlog',
+      priority: 'low',
+      assignee: 'Devon SRE',
+      timeEstimate: '2h'
+    }
+  ]);
+
+  const [newTitle, setNewTitle] = useState('');
+  const [newCategory, setNewCategory] = useState('Frontend');
+  const [newPriority, setNewPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const handleCreateTicket = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTitle.trim()) return;
+    const newTicket: TaskFlowTicket = {
+      id: `tf-${Math.floor(100 + Math.random() * 900)}`,
+      title: newTitle.trim(),
+      category: newCategory,
+      status: 'todo',
+      priority: newPriority,
+      assignee: 'Aria Lead',
+      timeEstimate: '3h'
+    };
+    setTickets([newTicket, ...tickets]);
+    setNewTitle('');
+    setNotice(`Ticket #${newTicket.id} created successfully!`);
+    setTimeout(() => setNotice(null), 2500);
+  };
+
+  const advanceStatus = (ticketId: string) => {
+    const cycle: Record<string, 'todo' | 'in_progress' | 'review' | 'done'> = {
+      backlog: 'todo',
+      todo: 'in_progress',
+      in_progress: 'review',
+      review: 'done',
+      done: 'done'
+    };
+    setTickets(prev =>
+      prev.map(t => (t.id === ticketId ? { ...t, status: cycle[t.status] || 'done' } : t))
+    );
+  };
+
+  const deleteTicket = (ticketId: string) => {
+    setTickets(prev => prev.filter(t => t.id !== ticketId));
+    setNotice('Ticket deleted from board.');
+    setTimeout(() => setNotice(null), 2000);
+  };
+
+  const filteredTickets = tickets.filter(t => {
+    if (priorityFilter === 'all') return true;
+    return t.priority === priorityFilter;
+  });
+
+  const columns = [
+    { id: 'backlog', title: 'Backlog', borderColor: 'border-slate-700/40', badgeBg: 'bg-slate-800' },
+    { id: 'todo', title: 'To Do', borderColor: 'border-blue-500/40', badgeBg: 'bg-blue-950/40 text-blue-400' },
+    { id: 'in_progress', title: 'In Progress', borderColor: 'border-amber-500/40', badgeBg: 'bg-amber-950/40 text-amber-400' },
+    { id: 'review', title: 'Code Review', borderColor: 'border-purple-500/40', badgeBg: 'bg-purple-950/40 text-purple-400' },
+    { id: 'done', title: 'Completed', borderColor: 'border-emerald-500/40', badgeBg: 'bg-emerald-950/40 text-emerald-400' }
+  ];
+
+  return (
+    <div className="w-full min-h-[640px] bg-[#09090d] text-slate-100 font-sans p-4 md:p-6 space-y-6">
+      {/* Top Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-violet-600 flex items-center justify-center font-black text-white text-base shadow-lg shadow-violet-600/30">
+            TF
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg md:text-xl font-bold text-white tracking-tight">
+                {project.name || 'TaskFlow Pro'}
+              </h1>
+              <span className="text-[10px] bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono px-2 py-0.5 rounded font-bold">
+                PORT 3000 ONLINE
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              MERN Stack Task & Project Management Engine · Real-time REST Telemetry
+            </p>
+          </div>
+        </div>
+
+        {/* Tab Switcher */}
+        <div className="flex items-center bg-[#14141a] p-1 rounded-xl border border-white/10 text-xs font-mono">
+          <button
+            onClick={() => setActiveTab('board')}
+            className={`px-3 py-1.5 rounded-lg transition ${activeTab === 'board' ? 'bg-violet-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+          >
+            Kanban Board
+          </button>
+          <button
+            onClick={() => setActiveTab('api')}
+            className={`px-3 py-1.5 rounded-lg transition ${activeTab === 'api' ? 'bg-violet-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+          >
+            REST API
+          </button>
+          <button
+            onClick={() => setActiveTab('telemetry')}
+            className={`px-3 py-1.5 rounded-lg transition ${activeTab === 'telemetry' ? 'bg-violet-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+          >
+            Stack Health
+          </button>
+        </div>
+      </div>
+
+      {notice && (
+        <div className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-xs font-mono py-2 px-4 rounded-xl text-center font-bold animate-fadeIn">
+          {notice}
+        </div>
+      )}
+
+      {/* Metric Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-[#121218] border border-white/5 p-3.5 rounded-2xl">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">Total Work Orders</span>
+          <div className="text-xl font-bold font-mono text-white mt-1">{tickets.length}</div>
+        </div>
+        <div className="bg-[#121218] border border-white/5 p-3.5 rounded-2xl">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400">In Active Flight</span>
+          <div className="text-xl font-bold font-mono text-amber-400 mt-1">
+            {tickets.filter(t => t.status === 'in_progress' || t.status === 'review').length}
+          </div>
+        </div>
+        <div className="bg-[#121218] border border-white/5 p-3.5 rounded-2xl">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400">Completed Tickets</span>
+          <div className="text-xl font-bold font-mono text-emerald-400 mt-1">
+            {tickets.filter(t => t.status === 'done').length}
+          </div>
+        </div>
+        <div className="bg-[#121218] border border-white/5 p-3.5 rounded-2xl">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-violet-400">Sprint Completion</span>
+          <div className="text-xl font-bold font-mono text-violet-400 mt-1">
+            {Math.round((tickets.filter(t => t.status === 'done').length / Math.max(1, tickets.length)) * 100)}%
+          </div>
+        </div>
+      </div>
+
+      {activeTab === 'board' && (
+        <div className="space-y-6">
+          {/* New Ticket Form & Filter Bar */}
+          <div className="bg-[#111116] border border-white/5 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-3">
+            <form onSubmit={handleCreateTicket} className="flex-1 flex flex-wrap gap-2.5 items-center min-w-[280px]">
+              <input
+                type="text"
+                placeholder="Draft new sprint ticket (e.g. Implement WebSocket gateway)..."
+                value={newTitle}
+                onChange={e => setNewTitle(e.target.value)}
+                className="flex-1 min-w-[200px] bg-[#09090c] border border-white/10 px-3 py-2 text-xs text-white rounded-xl outline-none focus:border-violet-500"
+              />
+              <select
+                value={newCategory}
+                onChange={e => setNewCategory(e.target.value)}
+                className="bg-[#09090c] border border-white/10 text-xs text-white px-3 py-2 rounded-xl outline-none"
+              >
+                <option value="Frontend">Frontend</option>
+                <option value="Backend">Backend</option>
+                <option value="Database">Database</option>
+                <option value="Security">Security</option>
+                <option value="DevOps">DevOps</option>
+              </select>
+              <select
+                value={newPriority}
+                onChange={(e: any) => setNewPriority(e.target.value)}
+                className="bg-[#09090c] border border-white/10 text-xs text-white px-3 py-2 rounded-xl outline-none"
+              >
+                <option value="low">Low Priority</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+              <button
+                type="submit"
+                className="bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs px-4 py-2 rounded-xl transition flex items-center gap-1.5 shadow"
+              >
+                <Plus size={14} /> Add Ticket
+              </button>
+            </form>
+
+            <div className="flex items-center gap-1.5 text-[11px] font-mono">
+              <span className="text-slate-400">Filter:</span>
+              {['all', 'urgent', 'high', 'medium', 'low'].map(p => (
+                <button
+                  key={p}
+                  onClick={() => setPriorityFilter(p)}
+                  className={`px-2 py-0.5 rounded capitalize ${priorityFilter === p ? 'bg-white/20 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Kanban Columns */}
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
+            {columns.map(col => {
+              const colTickets = filteredTickets.filter(t => t.status === col.id);
+              return (
+                <div
+                  key={col.id}
+                  className={`bg-[#0d0d12] border ${col.borderColor} rounded-2xl p-3 flex flex-col min-h-[440px] shadow-lg`}
+                >
+                  <div className="flex items-center justify-between pb-2.5 border-b border-white/5 mb-3">
+                    <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">{col.title}</span>
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${col.badgeBg}`}>
+                      {colTickets.length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-2.5 flex-1 overflow-y-auto">
+                    {colTickets.length === 0 ? (
+                      <div className="text-slate-600 text-[11px] italic text-center py-8">
+                        No tickets in {col.title.toLowerCase()}
+                      </div>
+                    ) : (
+                      colTickets.map(ticket => (
+                        <div
+                          key={ticket.id}
+                          className="bg-[#14141a] border border-white/5 hover:border-violet-500/40 p-3 rounded-xl space-y-2 transition shadow"
+                        >
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="font-mono text-slate-400">{ticket.id}</span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
+                                ticket.priority === 'urgent'
+                                  ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                  : ticket.priority === 'high'
+                                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                  : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                              }`}
+                            >
+                              {ticket.priority}
+                            </span>
+                          </div>
+
+                          <h4 className="text-xs font-semibold text-white leading-snug line-clamp-2">
+                            {ticket.title}
+                          </h4>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[10px] text-slate-400">
+                            <span className="flex items-center gap-1 font-mono">
+                              <User size={10} /> {ticket.assignee}
+                            </span>
+                            <span className="font-mono">{ticket.timeEstimate}</span>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1">
+                            <button
+                              onClick={() => deleteTicket(ticket.id)}
+                              className="text-slate-500 hover:text-rose-400 transition"
+                              title="Delete Ticket"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                            {col.id !== 'done' && (
+                              <button
+                                onClick={() => advanceStatus(ticket.id)}
+                                className="text-[10px] text-violet-400 hover:text-violet-300 font-bold flex items-center gap-0.5"
+                              >
+                                Advance <ChevronRight size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'api' && (
+        <div className="bg-[#111116] border border-white/5 p-6 rounded-2xl space-y-4 font-mono text-xs">
+          <h3 className="text-sm font-bold text-white uppercase tracking-wider font-sans">
+            Synthesized REST Endpoints (Express & MongoDB)
+          </h3>
+          <div className="space-y-2.5">
+            <div className="bg-[#09090d] border border-white/5 p-3 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">GET</span>
+                <span className="text-white">/api/tasks</span>
+              </div>
+              <span className="text-slate-400">Query tasks by project, sprint, or status</span>
+            </div>
+            <div className="bg-[#09090d] border border-white/5 p-3 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded font-bold">POST</span>
+                <span className="text-white">/api/tasks</span>
+              </div>
+              <span className="text-slate-400">Create new task with priority & assignee</span>
+            </div>
+            <div className="bg-[#09090d] border border-white/5 p-3 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-bold">PATCH</span>
+                <span className="text-white">/api/tasks/:id/status</span>
+              </div>
+              <span className="text-slate-400">Atomic Kanban stage transition update</span>
+            </div>
+            <div className="bg-[#09090d] border border-white/5 p-3 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded font-bold">DELETE</span>
+                <span className="text-white">/api/tasks/:id</span>
+              </div>
+              <span className="text-slate-400">Remove task entity from database</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'telemetry' && (
+        <div className="bg-[#111116] border border-white/5 p-6 rounded-2xl space-y-4 font-mono text-xs">
+          <h3 className="text-sm font-bold text-white uppercase tracking-wider font-sans">
+            Full-Stack Infrastructure Telemetry
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-[#09090d] border border-white/5 p-4 rounded-xl space-y-2">
+              <div className="text-slate-400 font-bold">Runtime Environment</div>
+              <div className="text-emerald-400">Node.js 22 + Express 5 · Port 3000</div>
+              <div className="text-slate-500 text-[11px]">HTTP reverse proxy routing active</div>
+            </div>
+            <div className="bg-[#09090d] border border-white/5 p-4 rounded-xl space-y-2">
+              <div className="text-slate-400 font-bold">Persistence Engine</div>
+              <div className="text-emerald-400">MongoDB Cluster · Mongoose ODM</div>
+              <div className="text-slate-500 text-[11px]">Indexes on projectId & assigneeId</div>
+            </div>
+            <div className="bg-[#09090d] border border-white/5 p-4 rounded-xl space-y-2">
+              <div className="text-slate-400 font-bold">Authentication Gate</div>
+              <div className="text-violet-400">JWT + Bcrypt (HMAC-SHA256)</div>
+              <div className="text-slate-500 text-[11px]">RBAC Roles: Admin, Manager, Contributor</div>
+            </div>
+            <div className="bg-[#09090d] border border-white/5 p-4 rounded-xl space-y-2">
+              <div className="text-slate-400 font-bold">Container Architecture</div>
+              <div className="text-blue-400">Docker Multi-Stage Build</div>
+              <div className="text-slate-500 text-[11px]">Alpine Linux runner with HEALTHCHECK probe</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 
 function InteractiveRestaurant({ appName }: { appName: string }) {
   const [category, setCategory] = useState('All');

@@ -21,11 +21,13 @@ export async function onRequestGet(context: any) {
   };
 
   const id = context.params.id;
-  return new Response(JSON.stringify({ id, status: 'ready', files: [] }), {
-    status: 200,
+  // Return 404 so client safely falls back to Firestore or in-memory project store
+  return new Response(JSON.stringify({ error: 'Project not cached on edge, fallback to store', id }), {
+    status: 404,
     headers: corsHeaders,
   });
 }
+
 
 export async function onRequestPut(context: any) {
   const corsHeaders = {

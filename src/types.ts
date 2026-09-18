@@ -1,3 +1,15 @@
+export interface AgentLog {
+  id?: string;
+  timestamp: string;
+  message: string;
+  agent?: string;
+  agentId?: string;
+  stage?: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  level?: 'info' | 'warn' | 'error' | 'success';
+}
+
+
 export interface FileNode {
   path: string;
   name: string;
@@ -22,7 +34,7 @@ export interface Agent {
   name: string;
   role: string;
   tier: 'ceo' | 'senior' | 'subagent';
-  provider: 'gemini' | 'openrouter' | 'nvidia' | 'groq';
+  provider: 'gemini' | 'openrouter' | 'nvidia' | 'groq' | 'deepseek';
   status: 'idle' | 'thinking' | 'active' | 'healing' | 'failed' | 'complete';
   avatar: string;
   currentTask?: string;
@@ -37,6 +49,7 @@ export interface Agent {
   generatedArtifact?: string;
   executionLatencyMs?: number;
 }
+
 
 export interface ModelRoutingOption {
   role: string;
@@ -77,10 +90,11 @@ export interface DeploymentCertificate {
 
 export interface Project {
   id: string;
+  userId?: string;
   name: string;
   description: string;
   prompt: string;
-  status: 'planning' | 'designing' | 'coding' | 'testing' | 'deployed' | 'idle' | 'building' | 'failed';
+  status: 'planning' | 'designing' | 'coding' | 'testing' | 'deployed' | 'idle' | 'building' | 'failed' | 'generating' | 'review';
   deploymentStatus?: 'idle' | 'queued' | 'building' | 'deployed' | 'failed';
   deploymentError?: string;
   files: FileNode[];

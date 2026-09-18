@@ -46,6 +46,7 @@ import {
   updateFirestoreProjectDetails,
   listenToFirestoreProject
 } from '../lib/firestoreService';
+import { executeAutonomousSwarm } from '../lib/swarmRunner';
 
 interface ProjectViewProps {
   projects: Project[];
@@ -96,6 +97,10 @@ export default function ProjectView({
 
   // Local simulated live terminal logs
   const [streamLogs, setStreamLogs] = useState<any[]>([]);
+  const [swarmProgress, setSwarmProgress] = useState<number>(0);
+  const [currentActiveAgent, setCurrentActiveAgent] = useState<Agent | undefined>(undefined);
+  const isSwarmRunningRef = useRef<boolean>(false);
+  const hasSavedCompleteRef = useRef<boolean>(false);
 
   // 1. Initial Load from Props, Firestore, or Server
   useEffect(() => {
@@ -165,6 +170,10 @@ export default function ProjectView({
         const data: Project = await res.json();
         setProject((prev) => {
           if (!prev) return data;
+          // Protect active client-side generation from being clobbered by stale server state
+          if (isSwarmRunningRef.current && data.status === 'deployed' && (!data.files || data.files.length < 3)) {
+            return prev;
+          }
           const prevAgentsStr = JSON.stringify(prev.agents?.map(a => [a.id, a.status, a.currentTask, a.subagents?.map(s => [s.id, s.status])]));
           const newAgentsStr = JSON.stringify(data.agents?.map(a => [a.id, a.status, a.currentTask, a.subagents?.map(s => [s.id, s.status])]));
           if (
@@ -178,15 +187,26 @@ export default function ProjectView({
           return { ...prev, ...data };
         });
 
-        // Persist to Firestore when status changes or when all agents are complete
+        // Persist to Firestore only on real status changes or once when complete (protects quota limit)
         const allAgentsComplete = data.agents && data.agents.length > 0 && data.agents.every(a => a.status === 'complete');
-        if (user && data.status && (lastSavedStatusRef.current !== data.status || allAgentsComplete)) {
+        const shouldSave = (data.status && lastSavedStatusRef.current !== data.status) || (allAgentsComplete && !hasSavedCompleteRef.current);
+        if (user && shouldSave) {
           lastSavedStatusRef.current = data.status;
+          if (allAgentsComplete) {
+            hasSavedCompleteRef.current = true;
+          }
           await saveFirestoreProject(data, user.uid);
           if (onProjectUpdated) {
             onProjectUpdated(data);
           }
         }
+      } else if (res.status === 404 && project) {
+        // Sync local client project into server memory so API knows about it
+        fetch('/api/projects/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(project)
+        }).catch(() => {});
       }
       const streamRes = await fetch(`/api/projects/${id}/stream`);
       if (streamRes.ok) {
@@ -200,15 +220,60 @@ export default function ProjectView({
     }
   };
 
+  // Autonomous Swarm Driver: Runs agents and synthesizes code if needed
+  useEffect(() => {
+    if (!project) return;
+    const allAgentsDone = project.agents && project.agents.length > 0 && project.agents.every((a) => a.status === 'complete');
+    const needsGeneration =
+      (project.status === 'generating' ||
+        project.status === 'planning' ||
+        project.status === 'coding' ||
+        !project.files ||
+        project.files.length === 0 ||
+        (!allAgentsDone && project.status !== 'deployed')) &&
+      project.status !== 'deployed';
+
+    if (needsGeneration && !isSwarmRunningRef.current) {
+      isSwarmRunningRef.current = true;
+      executeAutonomousSwarm(project, user?.uid, (progress, updatedProject) => {
+        setSwarmProgress(progress.percentage);
+        setStreamLogs(progress.logs);
+        const ag = updatedProject.agents?.find((a) => a.id === progress.activeAgentId);
+        if (ag) setCurrentActiveAgent(ag);
+        setProject({ ...updatedProject });
+        if (onProjectUpdated) {
+          onProjectUpdated(updatedProject);
+        }
+      })
+        .then((finalProject) => {
+          isSwarmRunningRef.current = false;
+          setProject(finalProject);
+          if (finalProject.files && finalProject.files.length > 0) {
+            const preferred = finalProject.files.find((f) => f.path === 'src/App.tsx') || finalProject.files[0];
+            setSelectedFile(preferred.path);
+            setFileContent(preferred.content || '');
+          }
+          if (onProjectUpdated) {
+            onProjectUpdated(finalProject);
+          }
+        })
+        .catch((err) => {
+          console.warn('Autonomous swarm execution notice:', err);
+          isSwarmRunningRef.current = false;
+        });
+    }
+  }, [project?.id, project?.status, project?.files?.length, user?.uid]);
+
   useEffect(() => {
     refreshProjectData();
     // Continue polling if swarm is active or agents are still in progress
     const allAgentsDone = project?.agents && project.agents.length > 0 && project.agents.every(a => a.status === 'complete');
     if (project?.status === 'deployed' && allAgentsDone) return;
 
-    const interval = setInterval(refreshProjectData, 2000);
+    const interval = setInterval(refreshProjectData, 3000);
     return () => clearInterval(interval);
   }, [id, user, project?.status, project?.agents]);
+
 
   if (!project) {
     return (
@@ -807,7 +872,15 @@ export default function ProjectView({
 
       {activeTab === 'preview' && (
         <div>
-          <LiveSandboxPreview project={project} onExport={() => setShowExportModal(true)} />
+          <LiveSandboxPreview
+            project={project}
+            onExport={() => setShowExportModal(true)}
+            onViewCode={() => setActiveTab('code')}
+            onViewSwarm={() => setActiveTab('swarm')}
+            progressPercentage={swarmProgress}
+            activeAgent={currentActiveAgent}
+            logs={streamLogs}
+          />
         </div>
       )}
 

@@ -1,5 +1,6 @@
 // Cloudflare Pages Function for /api/projects
 // Handles GET, POST, and OPTIONS directly at the Cloudflare edge
+import { synthesizeProjectArtifact } from '../../src/lib/projectSynthesizer';
 
 export async function onRequestOptions() {
   return new Response(null, {
@@ -60,6 +61,12 @@ export async function onRequestPost(context: any) {
       .trim() || 'Autonomous Application';
 
     const projectId = `proj_${Math.random().toString(36).substring(2, 9)}`;
+    const artifact = synthesizeProjectArtifact(prompt, cleanAppName);
+    const initialFiles = [
+      { path: 'docs/PRD.md', name: 'PRD.md', type: 'file' as const, content: artifact.prd },
+      { path: 'docs/ARCHITECTURE.md', name: 'ARCHITECTURE.md', type: 'file' as const, content: artifact.architecture },
+      ...artifact.files
+    ];
 
     const newProject = {
       id: projectId,
@@ -76,7 +83,7 @@ export async function onRequestPost(context: any) {
       createdAt: new Date().toISOString(),
       aiCreditsUsed: 350,
       modelConfig: modelConfig,
-      files: [],
+      files: initialFiles,
       deployedUrl: `/preview/${projectId}`,
       userId: userId,
       agents: [
