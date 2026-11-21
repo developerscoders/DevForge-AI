@@ -920,9 +920,10 @@ const registryEntries: RegisteredTool[] = [
       const astErrors = runTypeScriptAstDiagnostics(proj);
       const pkg = proj.files.find((f) => f.path === 'package.json');
       const indexHtml = proj.files.find((f) => f.path === 'index.html');
+      const requiresFrontend = proj.projectClassification?.requires_frontend !== false;
       const missing: string[] = [];
       if (!pkg) missing.push('package.json');
-      if (!indexHtml) missing.push('index.html');
+      if (requiresFrontend && !indexHtml) missing.push('index.html');
 
       return {
         output: {

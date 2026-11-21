@@ -121,6 +121,34 @@ export default function LiveSwarmGenerationTracker({
             <span>{project.files?.length || 0} Files Written</span>
           </div>
         </div>
+
+        {(run?.status === 'failed' || project.status === 'failed') && (
+          <div className="bg-rose-950/30 border border-rose-500/40 rounded-xl p-3.5 text-xs font-mono text-rose-200 space-y-1">
+            <div className="flex items-center gap-2 font-bold text-rose-300 uppercase tracking-wider">
+              <AlertTriangle size={14} className="text-rose-400 shrink-0" />
+              <span>Run Failure Diagnostics</span>
+            </div>
+            {(() => {
+              const failedTask = run?.tasks?.find((t) => t.status === 'failed');
+              const failedTool = [...(run?.toolExecutions || [])].reverse().find((t) => t.status === 'failed');
+              const failedAgent = project.agents?.find((a) => a.status === 'failed');
+              return (
+                <div className="space-y-0.5 text-[11px] text-rose-200/90">
+                  {failedTask && (
+                    <div>Task: <span className="text-white font-bold">{failedTask.title}</span> ({failedTask.agentName})</div>
+                  )}
+                  {failedAgent && (
+                    <div>Agent Model: <span className="text-rose-100">{failedAgent.modelUsed || failedAgent.model}</span></div>
+                  )}
+                  {failedTool && (
+                    <div>Tool Failure: <span className="text-rose-100">{failedTool.toolName}</span> — {failedTool.error}</div>
+                  )}
+                  <div>Error: {run?.error || failedTask?.error || failedAgent?.error || 'Execution halted due to failed task'}</div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
       </div>
 
       {/* Main Grid: Active Agent + Pipeline + Logs & Live Tools */}
@@ -169,6 +197,8 @@ export default function LiveSwarmGenerationTracker({
                 const isComplete = agent.status === 'complete';
                 const isActive = agent.status === 'active' || agent.status === 'thinking' || agent.status === 'healing';
                 const isFailed = agent.status === 'failed';
+                const isWaiting = agent.status === 'waiting';
+                const isCancelled = agent.status === 'cancelled';
                 return (
                   <div
                     key={agent.id || idx}
@@ -177,8 +207,12 @@ export default function LiveSwarmGenerationTracker({
                         ? 'bg-rose-950/20 border-rose-500/40 text-rose-300'
                         : isActive
                         ? 'bg-violet-950/30 border-violet-500/40 text-white'
+                        : isWaiting
+                        ? 'bg-amber-950/15 border-amber-500/25 text-amber-200'
                         : isComplete
                         ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
+                        : isCancelled
+                        ? 'bg-slate-900/50 border-slate-700/40 text-slate-500'
                         : 'bg-[#15151c]/60 border-white/5 text-slate-400'
                     }`}
                   >
@@ -190,7 +224,7 @@ export default function LiveSwarmGenerationTracker({
                       ) : isActive ? (
                         <Loader2 size={14} className="animate-spin text-violet-400" />
                       ) : (
-                        <Clock size={14} className="text-slate-500" />
+                        <Clock size={14} className={isWaiting ? 'text-amber-400' : 'text-slate-500'} />
                       )}
                       <span className="font-semibold">{agent.name}</span>
                       <span className="text-[10px] text-slate-500">({agent.subagents?.length || 0} sub)</span>

@@ -14,13 +14,13 @@ proving it. You have live tools connected to the backend — use them for
 every fact; never assume or narrate a result you haven't actually fetched.
 
 # FIXED SWARM ROSTER — verified free tier & latest production models
-| Lead   | Role                  | Provider | Primary Model              | Fallback Models |
-|--------|-----------------------|----------|-----------------------------|------------------|
-| Parker | Product Manager       | OpenRouter | meta-llama/llama-3.3-70b-instruct:free | deepseek/deepseek-chat:free, openrouter/free |
-| Sophia | Solution Architect    | OpenRouter | deepseek/deepseek-r1:free      | deepseek/deepseek-chat:free, qwen/qwen-2.5-coder-32b-instruct:free |
-| Frank  | Frontend Engineer     | NVIDIA NIM | meta/llama-3.1-70b-instruct | (none — retry same model) |
-| Quinn  | QA & Security Lead    | Groq     | llama-3.3-70b-versatile     | (none — retry same model) |
-| Devon  | DevOps & SRE Lead     | Groq     | mixtral-8x7b-32768          | (none — retry same model) |
+| Lead   | Role                  | Provider   | Primary Model                          | Fallback Models |
+|--------|-----------------------|------------|----------------------------------------|-----------------|
+| Parker | Product Manager       | OpenRouter | meta-llama/llama-3.2-1b-instruct       | deepseek/deepseek-chat-v3.1, meta-llama/llama-3.3-70b-instruct:free |
+| Sophia | Solution Architect    | OpenRouter | deepseek/deepseek-chat-v3.1            | qwen/qwen-2.5-coder-32b-instruct:free, meta-llama/llama-3.3-70b-instruct:free |
+| Frank  | Frontend Engineer     | OpenRouter | qwen/qwen-2.5-coder-32b-instruct:free  | deepseek/deepseek-chat-v3.1, meta-llama/llama-3.3-70b-instruct:free |
+| Quinn  | QA & Security Lead    | Groq       | openai/gpt-oss-20b                     | llama-3.3-70b-versatile, openai/gpt-oss-120b |
+| Devon  | DevOps & SRE Lead     | Groq       | openai/gpt-oss-20b                     | llama-3.3-70b-versatile, openai/gpt-oss-120b |
 
 Provider fetches enforce a resilient 30-second window. If \`delegate_milestone\`
 reports a timeout or error on the primary model, retry once with the
@@ -495,12 +495,18 @@ export function runAstAudit(project: Project, compilerDiagnostics: string[] = []
   }
 
   const feApiFile = project.files.find((f) => f.path.includes('api.ts'));
-  const schemaFile = project.files.find(
-    (f) =>
-      f.path.includes('schema.sql') || f.path.includes('server.ts') || f.path.includes('routes')
-  );
+  const serverContractContent = project.files
+    .filter(
+      (f) =>
+        f.path.includes('schema.sql') ||
+        f.path.includes('server.ts') ||
+        f.path.includes('server/') ||
+        f.path.includes('routes')
+    )
+    .map((f) => f.content || '')
+    .join('\n');
 
-  if (feApiFile?.content && schemaFile?.content) {
+  if (feApiFile?.content && serverContractContent) {
     const feEndpoints = Array.from(
       feApiFile.content.matchAll(/['"`](\/api\/[a-zA-Z0-9_\-\/]+)['"`]/g)
     ).map((m) => m[1]);
@@ -509,8 +515,8 @@ export function runAstAudit(project: Project, compilerDiagnostics: string[] = []
       if (
         ep !== '/api/health' &&
         endpointBase &&
-        !schemaFile.content!.includes(ep) &&
-        !schemaFile.content!.includes(endpointBase)
+        !serverContractContent.includes(ep) &&
+        !serverContractContent.includes(endpointBase)
       ) {
         brokenReferences.push(
           `Frontend API client references endpoint "${ep}" that is missing in server/schema contracts.`

@@ -135,162 +135,68 @@ function AppContent() {
     initFetch();
   }, [user]);
 
-  // 1. Submit New Project Trigger
+  // 1. Submit New Project Trigger (requires real backend project + activeRunId)
   const handleForgeProject = async (promptText: string, modelConfig: Record<string, string>) => {
-    try {
-      const generationCreditCost = 350;
-      if (activeSub.creditsRemaining < generationCreditCost) {
-        setCreditNotice(`You need ${generationCreditCost} credits to generate a project. Recharge to continue.`);
-        return;
-      }
-      let newProject: any = null;
-      try {
-        const res = await fetch('/api/projects', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: promptText, modelConfig, userId: user?.uid }),
-        });
-        const contentType = res.headers.get('content-type') || '';
-        const responseText = await res.text();
-        if (res.status === 402) {
-          const detail = (() => { try { return JSON.parse(responseText); } catch { return null; } })();
-          setCreditNotice(detail?.error || 'You do not have enough credits to generate a project.');
-          return;
-        }
-        if (res.ok && contentType.includes('application/json')) {
-          newProject = JSON.parse(responseText);
-        } else {
-          console.warn(`[Project Creation] Server returned status ${res.status}, using edge project synthesizer.`);
-        }
-      } catch (fetchErr) {
-        console.warn('[Project Creation] Direct /api/projects network fetch error, using edge synthesizer:', fetchErr);
-      }
-
-      if (!newProject) {
-        const projectId = `proj_${Math.random().toString(36).substring(2, 9)}`;
-        const cleanAppName = (promptText.split(/[\n,.]/, 1)[0].slice(0, 64)).replace(/[^a-zA-Z0-9\s-]/g, '').trim() || 'Autonomous Application';
-        newProject = {
-          id: projectId,
-          name: cleanAppName,
-          description: promptText.slice(0, 180),
-          prompt: promptText,
-          status: 'planning',
-          createdAt: new Date().toISOString(),
-          aiCreditsUsed: 350,
-          modelConfig: modelConfig || {},
-          files: [],
-          deployedUrl: `/preview/${projectId}`,
-          agents: [
-            {
-              id: 'ag_ceo',
-              name: 'Aria CEO',
-              role: 'Chief AI Executive & Orchestrator',
-              tier: 'ceo',
-              provider: 'gemini',
-              status: 'thinking',
-              avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=80&fit=crop&q=60',
-              model: 'gemini-2.5-flash',
-              currentTask: 'Deconstructing intent and setting milestone directives for Senior Leads',
-              validationStatus: 'in_review',
-              ceoDirectives: [
-                'Deconstruct user prompt into high-impact functional modules',
-                'Enforce strict verification on PRD, Architecture, and UI state consistency',
-                'Deploy real-time diagnostic remediation to any failing subagent'
-              ],
-              outputLogs: []
-            },
-            {
-              id: 'ag_pm',
-              name: 'Parker Lead',
-              role: 'Senior Product Manager',
-              tier: 'senior',
-              provider: 'openrouter',
-              status: 'idle',
-              avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=80&fit=crop&q=60',
-              model: AGENT_ROSTER.parker.defaultModel,
-              currentTask: 'Standing by for CEO directive on PRD scoping',
-              validationStatus: 'pending',
-              subagents: [],
-              outputLogs: []
-            },
-            {
-              id: 'ag_arch',
-              name: 'Sophia Lead',
-              role: 'Senior Solution Architect',
-              tier: 'senior',
-              provider: 'openrouter',
-              status: 'idle',
-              avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=80&fit=crop&q=60',
-              model: AGENT_ROSTER.sophia.defaultModel,
-              currentTask: 'Standing by for PRD validation from CEO',
-              validationStatus: 'pending',
-              subagents: [],
-              outputLogs: []
-            },
-            {
-              id: 'ag_fe',
-              name: 'Frank Lead',
-              role: 'Senior Frontend Engineer',
-              tier: 'senior',
-              provider: 'nvidia',
-              status: 'idle',
-              avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=80&fit=crop&q=60',
-              model: AGENT_ROSTER.frank.defaultModel,
-              currentTask: 'Standing by for Architecture approval',
-              validationStatus: 'pending',
-              subagents: [],
-              outputLogs: []
-            },
-            {
-              id: 'ag_qa',
-              name: 'Quinn Lead',
-              role: 'Senior QA & Testing Lead',
-              tier: 'senior',
-              provider: 'groq',
-              status: 'idle',
-              avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&fit=crop&q=60',
-              model: AGENT_ROSTER.quinn.defaultModel,
-              currentTask: 'Standing by for code synthesis',
-              validationStatus: 'pending',
-              subagents: [],
-              outputLogs: []
-            },
-            {
-              id: 'ag_sre',
-              name: 'Devon Lead',
-              role: 'Senior DevOps & SRE Lead',
-              tier: 'senior',
-              provider: 'groq',
-              status: 'idle',
-              avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=80&fit=crop&q=60',
-              model: AGENT_ROSTER.devon.defaultModel,
-              currentTask: 'Standing by for QA pass',
-              validationStatus: 'pending',
-              subagents: [],
-              outputLogs: []
-            }
-          ]
-        };
-      }
-      
-      // Save directly to Firestore database
-      if (user) {
-        await saveFirestoreProject(newProject, user.uid);
-      }
-      
-      setProjects((prev) => [newProject, ...prev]);
-
-      // Deduct credits from user account
-      const estDeduction = 350;
-      if (user) {
-        await updateUserCredits(estDeduction);
-      }
-
-      navigate(`/projects/${newProject.id}`);
-    } catch (err) {
-      console.error('Error forging project:', err);
-      setCreditNotice(err instanceof Error ? err.message : 'Project generation failed. Please try again.');
+    const generationCreditCost = 350;
+    if (activeSub.creditsRemaining < generationCreditCost) {
+      const msg = `You need ${generationCreditCost} credits to generate a project. Recharge to continue.`;
+      setCreditNotice(msg);
+      throw new Error(msg);
     }
+
+    let res: Response;
+    try {
+      res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: promptText, modelConfig, userId: user?.uid }),
+      });
+    } catch (fetchErr: any) {
+      const msg = `Network error creating project: ${fetchErr?.message || 'Unable to reach orchestrator server'}`;
+      setCreditNotice(msg);
+      throw new Error(msg);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    const responseText = await res.text();
+    let parsed: any = null;
+    if (contentType.includes('application/json') && responseText) {
+      try {
+        parsed = JSON.parse(responseText);
+      } catch {
+        parsed = null;
+      }
+    }
+
+    if (res.status === 402) {
+      const msg = parsed?.error || 'You do not have enough credits to generate a project.';
+      setCreditNotice(msg);
+      throw new Error(msg);
+    }
+
+    if (!res.ok) {
+      const msg = parsed?.message || parsed?.error || `Server rejected project creation (HTTP ${res.status})`;
+      setCreditNotice(msg);
+      throw new Error(msg);
+    }
+
+    if (!parsed || !parsed.id || !parsed.activeRunId) {
+      const msg = 'Backend did not return a valid project ID and active orchestration run ID.';
+      setCreditNotice(msg);
+      throw new Error(msg);
+    }
+
+    const newProject: Project = parsed;
+
+    // Persist validated project snapshot and deduct credits only after confirmed backend creation
+    if (user) {
+      await saveFirestoreProject(newProject, user.uid);
+      await updateUserCredits(generationCreditCost);
+    }
+
+    setCreditNotice(null);
+    setProjects((prev) => [newProject, ...prev]);
+    navigate(`/projects/${newProject.id}`);
   };
 
   // 2. Save Code File

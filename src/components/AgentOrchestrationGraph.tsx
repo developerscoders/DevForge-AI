@@ -56,7 +56,7 @@ const defaultAgentPrompts: Record<string, { prompt: string; model: string; artif
   },
   'ag_fe': {
     prompt: 'Runtime prompt loaded from agents/frank.md when the milestone is dispatched.',
-    model: `NVIDIA NIM (${AGENT_ROSTER.frank.defaultModel})`,
+    model: `OpenRouter (${AGENT_ROSTER.frank.defaultModel})`,
     artifact: 'React 19 UI Component Tree & Tailwind CSS Layout'
   },
   'ag_qa': {
@@ -154,20 +154,24 @@ export default function AgentOrchestrationGraph({
 
   const statusIcons: Record<string, any> = {
     idle: Clock,
+    waiting: Clock,
     thinking: Activity,
     active: Play,
     healing: RefreshCw,
     failed: AlertTriangle,
     complete: CheckCircle,
+    cancelled: X,
   };
 
   const statusColors: Record<string, string> = {
     idle: 'bg-slate-900 text-slate-500 border-slate-800',
+    waiting: 'bg-amber-950/30 text-amber-300 border-amber-500/30',
     thinking: 'bg-amber-500/15 text-amber-400 border-amber-500/30 animate-pulse',
     active: 'bg-violet-500/15 text-violet-400 border-violet-500/30 animate-pulse',
     healing: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 animate-pulse',
     failed: 'bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse',
     complete: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    cancelled: 'bg-slate-900 text-slate-400 border-slate-700',
   };
 
   const providerBadges: Record<string, { label: string; bg: string; text: string; border: string }> = {
@@ -251,6 +255,8 @@ export default function AgentOrchestrationGraph({
         return { border: 'border-rose-500/60', text: 'text-rose-400', label: 'FAIL' };
       case 'cancelled':
         return { border: 'border-slate-600', text: 'text-slate-400', label: 'STOP' };
+      case 'skipped':
+        return { border: 'border-rose-900/50', text: 'text-rose-300/70', label: 'SKIP' };
       case 'blocked':
         return { border: 'border-slate-800', text: 'text-slate-500', label: 'WAIT' };
       default:
@@ -326,7 +332,7 @@ export default function AgentOrchestrationGraph({
 
       {/* Live Execution DAG Nodes Stepper */}
       <div className="bg-[#0b0b0d] border border-[#222222] p-4 overflow-x-auto">
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 min-w-[780px]">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-2 min-w-[820px]">
           {dagDisplayNodes.map((node) => {
             const style = taskStatusBadge(node.status);
             return (
@@ -354,6 +360,32 @@ export default function AgentOrchestrationGraph({
           })}
         </div>
       </div>
+
+      {/* Explicit Run Failure Diagnostics Panel */}
+      {(run?.status === 'failed' || project?.status === 'failed') && (
+        <div className="bg-rose-950/30 border border-rose-500/40 p-4 font-mono text-xs text-rose-200 space-y-1.5">
+          <div className="flex items-center gap-2 font-bold text-rose-300 uppercase tracking-wider">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>Orchestration Run Failed</span>
+          </div>
+          {(() => {
+            const failedTask = allTasks.find((t) => t.status === 'failed');
+            const failedTool = [...allToolExecutions].reverse().find((t) => t.status === 'failed');
+            const failedAgent = activeAgents.find((a) => a.status === 'failed');
+            return (
+              <div className="grid sm:grid-cols-2 gap-2 text-[11px]">
+                <div>Failing Task: <span className="text-white font-bold">{failedTask?.title || 'Pipeline step'}</span></div>
+                <div>Owning Agent: <span className="text-white font-bold">{failedTask?.agentName || failedAgent?.name || 'Unknown'}</span></div>
+                <div>Model Executed: <span className="text-rose-100">{failedAgent?.modelUsed || failedAgent?.model || 'N/A'}</span></div>
+                <div>Failed Tool: <span className="text-rose-100">{failedTool ? `${failedTool.toolName} (${failedTool.error || 'failed'})` : 'None'}</span></div>
+                <div className="sm:col-span-2 text-rose-300">
+                  Reason: {run?.error || failedTask?.error || failedAgent?.error || 'Execution stopped cleanly due to task failure.'}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {healingAlert && (
         <motion.div

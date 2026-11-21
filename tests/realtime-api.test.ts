@@ -89,7 +89,7 @@ describe('Real-Time Execution API, Persistence & SSE Replay', () => {
     }
 
     expect(execPayload.run.status).toBe('completed');
-    expect(execPayload.run.tasks).toHaveLength(8);
+    expect(execPayload.run.tasks).toHaveLength(9);
     expect(execPayload.events.length).toBeGreaterThan(10);
 
     // Check /api/projects/:id/tools endpoint returns persisted tool execution records

@@ -71,7 +71,7 @@ describe('MultiAgentOrchestrator DAG, Subagents, Approvals, Cancellation & Recov
     return project;
   }
 
-  it('executes full 8-node DAG, parallel branches, dynamic subagents, tools, and issues certificate', async () => {
+  it('executes full 9-node DAG, parallel branches, dynamic subagents, tools, and issues certificate', async () => {
     const project = createSampleProject('proj_dag_01');
 
     const run = await orchestratorEngine.startExecutionRun(project, {
@@ -95,7 +95,7 @@ describe('MultiAgentOrchestrator DAG, Subagents, Approvals, Cancellation & Recov
 
     expect(finalRun.error).toBeUndefined();
     expect(finalRun.status).toBe('completed');
-    expect(finalRun.tasks).toHaveLength(8);
+    expect(finalRun.tasks).toHaveLength(9);
     expect(finalRun.tasks.every((t) => t.status === 'completed')).toBe(true);
     expect(finalRun.dynamicSubagents.length).toBeGreaterThanOrEqual(4);
     expect(finalRun.toolExecutions.length).toBeGreaterThanOrEqual(10);

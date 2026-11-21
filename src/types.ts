@@ -24,7 +24,7 @@ export interface SubAgent {
   name: string;
   role: string;
   task: string;
-  status: 'idle' | 'active' | 'failed' | 'healing' | 'complete' | 'cancelled';
+  status: 'idle' | 'waiting' | 'active' | 'failed' | 'healing' | 'complete' | 'cancelled';
   instructionsReceived: string[];
   healingSummary?: string;
   model?: string;
@@ -44,11 +44,15 @@ export interface Agent {
   role: string;
   tier: 'ceo' | 'senior' | 'subagent';
   provider: 'gemini' | 'openrouter' | 'nvidia' | 'groq' | 'deepseek';
-  status: 'idle' | 'thinking' | 'active' | 'healing' | 'failed' | 'complete' | 'cancelled';
+  status: 'idle' | 'waiting' | 'thinking' | 'active' | 'healing' | 'failed' | 'complete' | 'cancelled';
   avatar: string;
   currentTask?: string;
   outputLogs: { timestamp: string; message: string; type: 'info' | 'success' | 'warning' | 'error' }[];
   model: string;
+  requestedModel?: string;
+  fallbackUsed?: boolean;
+  attemptsCount?: number;
+  error?: string;
   subagents?: SubAgent[];
   ceoDirectives?: string[];
   validationStatus?: 'pending' | 'in_review' | 'validated' | 'rejection_healing';
@@ -284,6 +288,17 @@ export interface ExecutionRunMetrics {
   totalDurationMs: number;
 }
 
+export interface FeatureRequirementMapping {
+  id: string;
+  feature: string;
+  category: 'auth' | 'frontend' | 'backend' | 'database' | 'realtime' | 'testing' | 'devops' | 'core';
+  taskId: string;
+  expectedFiles: string[];
+  acceptanceCriterion: string;
+  verified?: boolean;
+  verificationNote?: string;
+}
+
 export interface ExecutionRun {
   runId: string;
   projectId: string;
@@ -298,6 +313,7 @@ export interface ExecutionRun {
   error?: string;
   cancelledReason?: string;
   recoveredFromRestart?: boolean;
+  featureMap?: FeatureRequirementMapping[];
   tasks: TaskNode[];
   dynamicSubagents: SubAgent[];
   toolExecutions: ToolExecutionRecord[];
@@ -324,6 +340,7 @@ export interface Project {
   description: string;
   prompt: string;
   projectClassification?: any;
+  featureMap?: FeatureRequirementMapping[];
   status: 'planning' | 'designing' | 'coding' | 'testing' | 'deployed' | 'idle' | 'building' | 'failed' | 'generating' | 'review' | 'cancelled';
   deploymentStatus?: 'idle' | 'queued' | 'building' | 'deployed' | 'failed';
   deploymentError?: string;

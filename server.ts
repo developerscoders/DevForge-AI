@@ -490,8 +490,6 @@ app.post('/api/projects', async (req, res) => {
     userId: req.body?.userId || undefined,
   };
 
-  db.projects.push(initialProject);
-  db.activeSubscription.creditsRemaining -= generationCreditCost;
   executionStore.saveProject(initialProject);
 
   try {
@@ -502,6 +500,9 @@ app.post('/api/projects', async (req, res) => {
       requireApprovalForCriticalWrites: Boolean(requireApprovalForCriticalWrites),
     });
 
+    db.projects.push(initialProject);
+    db.activeSubscription.creditsRemaining -= generationCreditCost;
+
     const latestProject = executionStore.getProject(projectId) || initialProject;
     return res.json({
       ...latestProject,
@@ -509,6 +510,9 @@ app.post('/api/projects', async (req, res) => {
       lastExecutionRun: run,
     });
   } catch (err: any) {
+    initialProject.status = 'failed';
+    initialProject.updatedAt = new Date().toISOString();
+    executionStore.saveProject(initialProject);
     return res.status(500).json({
       error: 'Failed to start multi-agent orchestration run',
       message: redactSecrets(err?.message || 'Unknown orchestration error'),
@@ -801,15 +805,56 @@ app.get('/api/projects/:id/events', (req, res) => {
 });
 
 // System Multi-Model Providers Health Check API
-app.get('/api/system/providers', (req, res) => {
+app.get('/api/system/providers', (_req, res) => {
   const status = getProviderConfigStatus();
   res.json({
     providers: [
-      { id: 'gemini', name: 'Google Gemini', defaultModel: 'gemini-2.5-flash', availableModels: ['gemini-2.5-flash', 'gemini-2.5-pro'], configured: status.gemini },
-      { id: 'openrouter', name: 'OpenRouter (Free Tier)', defaultModel: 'meta-llama/llama-3.3-70b-instruct:free', availableModels: ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-r1:free', 'deepseek/deepseek-chat:free', 'qwen/qwen-2.5-coder-32b-instruct:free', 'openrouter/free'], configured: status.openrouter },
-      { id: 'nvidia', name: 'NVIDIA NIM', defaultModel: 'meta/llama-3.1-70b-instruct', availableModels: ['meta/llama-3.1-70b-instruct', 'nvidia/nemotron-4-340b-instruct'], configured: status.nvidia },
-      { id: 'groq', name: 'Groq (Free Tier)', defaultModel: 'llama-3.3-70b-versatile', availableModels: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'], configured: status.groq },
-    ]
+      {
+        id: 'gemini',
+        name: status.gemini.name,
+        defaultModel: AGENT_ROSTER.aria.defaultModel,
+        availableModels: status.gemini.models,
+        modelCatalog: status.gemini.modelCatalog,
+        configured: status.gemini.configured,
+        available: status.gemini.available,
+        availabilityReason: status.gemini.availabilityReason,
+        fallbackProvider: null,
+      },
+      {
+        id: 'openrouter',
+        name: status.openrouter.name,
+        defaultModel: AGENT_ROSTER.sophia.defaultModel,
+        availableModels: status.openrouter.models,
+        modelCatalog: status.openrouter.modelCatalog,
+        configured: status.openrouter.configured,
+        available: status.openrouter.available,
+        availabilityReason: status.openrouter.availabilityReason,
+        fallbackProvider: status.gemini.configured ? 'gemini' : null,
+      },
+      {
+        id: 'groq',
+        name: status.groq.name,
+        defaultModel: AGENT_ROSTER.quinn.defaultModel,
+        availableModels: status.groq.models,
+        modelCatalog: status.groq.modelCatalog,
+        configured: status.groq.configured,
+        available: status.groq.available,
+        availabilityReason: status.groq.availabilityReason,
+        fallbackProvider: status.gemini.configured ? 'gemini' : null,
+      },
+      {
+        id: 'nvidia',
+        name: status.nvidia.name,
+        defaultModel: status.nvidia.models[0],
+        availableModels: status.nvidia.models,
+        modelCatalog: status.nvidia.modelCatalog,
+        configured: status.nvidia.configured,
+        available: status.nvidia.available,
+        availabilityReason: status.nvidia.availabilityReason,
+        fallbackProvider: status.openrouter.configured ? 'openrouter' : status.gemini.configured ? 'gemini' : null,
+      },
+    ],
+    roster: Object.values(AGENT_ROSTER),
   });
 });
 
@@ -890,22 +935,25 @@ app.get('/api/billing/plans', async (req, res) => {
 });
 
 // 5b. Agent Multi-LLM Provider Status Inspector
-app.get('/api/agents/providers/status', (req, res) => {
+app.get('/api/agents/providers/status', (_req, res) => {
   const status = getProviderConfigStatus();
   res.json({
     status: 'online',
     timestamp: new Date().toISOString(),
     providers: status,
-    agents: [
-      ...Object.values(AGENT_ROSTER).map((agent) => ({
-        id: agent.id,
-        name: agent.name,
-        role: agent.role,
-        provider: agent.provider,
-        model: agent.defaultModel,
-        configured: status[agent.provider].configured,
-      })),
-    ]
+    agents: Object.values(AGENT_ROSTER).map((agent) => ({
+      id: agent.id,
+      key: agent.key,
+      name: agent.name,
+      role: agent.role,
+      provider: agent.provider,
+      model: agent.defaultModel,
+      fallbackModels: agent.fallbackModels,
+      configured: status[agent.provider].configured,
+      available: agent.availability === 'verified' && status[agent.provider].available,
+      availability: agent.availability,
+      availabilityReason: agent.availabilityReason || status[agent.provider].availabilityReason,
+    })),
   });
 });
 

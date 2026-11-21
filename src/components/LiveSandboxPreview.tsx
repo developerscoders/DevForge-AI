@@ -37,7 +37,12 @@ export default function LiveSandboxPreview({
   const allAgentsDone =
     project.agents && project.agents.length > 0 && project.agents.every((a) => a.status === 'complete');
 
+  const isFailed = project.status === 'failed' || executionRun?.status === 'failed';
+  const isCancelled = project.status === 'cancelled' || executionRun?.status === 'cancelled';
+
   const isGenerating =
+    isFailed ||
+    isCancelled ||
     project.status === 'generating' ||
     project.status === 'planning' ||
     project.status === 'coding' ||
@@ -51,9 +56,19 @@ export default function LiveSandboxPreview({
     <div className="min-h-[720px] border border-white/10 bg-[#080808] flex flex-col rounded-2xl overflow-hidden shadow-2xl">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#0d0d0d] p-3.5 font-mono text-xs">
         <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${isGenerating ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`}></span>
-          <span className={isGenerating ? 'text-amber-300 font-bold' : 'text-emerald-400'}>
-            {isGenerating ? 'Swarm Build Container · Live Generation' : `Artifact Deployed · ${project.files?.length || 0} files`}
+          <span
+            className={`w-2 h-2 rounded-full ${
+              isFailed ? 'bg-rose-500' : isCancelled ? 'bg-slate-400' : isGenerating ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'
+            }`}
+          ></span>
+          <span className={isFailed ? 'text-rose-400 font-bold' : isGenerating ? 'text-amber-300 font-bold' : 'text-emerald-400'}>
+            {isFailed
+              ? 'Swarm Build Halted · Failure Diagnostics'
+              : isCancelled
+              ? 'Swarm Build Cancelled'
+              : isGenerating
+              ? 'Swarm Build Container · Live Generation'
+              : `Artifact Deployed · ${project.files?.length || 0} files`}
           </span>
         </div>
         <div className="flex items-center gap-1">

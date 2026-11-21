@@ -257,6 +257,7 @@ export default function ProjectView({
             evt.type === 'run:completed' ||
             evt.type === 'run:failed' ||
             evt.type === 'run:cancelled' ||
+            evt.type === 'agent:status' ||
             evt.type === 'task:updated' ||
             evt.type === 'tool:completed' ||
             evt.type === 'tool:failed' ||
@@ -299,7 +300,7 @@ export default function ProjectView({
 
     // Light safety polling only while execution is non-terminal
     pollTimer = window.setInterval(() => {
-      if (project?.status !== 'deployed' || executionRun?.status === 'running' || executionRun?.status === 'awaiting_approval') {
+      if (!isTerminalRef.current) {
         refreshProjectData();
       }
     }, 3000);
@@ -309,6 +310,16 @@ export default function ProjectView({
       if (pollTimer !== null) window.clearInterval(pollTimer);
     };
   }, [id, user?.uid]);
+
+  const isTerminalRef = useRef(false);
+  useEffect(() => {
+    const pStatus = project?.status;
+    const rStatus = executionRun?.status;
+    isTerminalRef.current =
+      (pStatus === 'deployed' || pStatus === 'failed' || pStatus === 'cancelled') &&
+      rStatus !== 'running' &&
+      rStatus !== 'awaiting_approval';
+  }, [project?.status, executionRun?.status]);
 
 
   if (!project) {
