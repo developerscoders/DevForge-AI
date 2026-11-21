@@ -276,7 +276,7 @@ app.get('/api/projects/:id/preview/status', (req, res) => {
   if (!project) return res.status(404).json({ success: false, status: 'project_not_found' });
 
   try {
-    const root = ensureProjectWorkspaceDir(projectId);
+    ensureProjectWorkspaceDir(projectId);
     const indexPath = resolveSafeWorkspacePath(projectId, 'dist/index.html');
     const packagePath = resolveSafeWorkspacePath(projectId, 'package.json');
     const hasBuild = fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
@@ -301,7 +301,12 @@ app.get('/preview/:id', (req, res) => {
   try {
     const indexPath = resolveSafeWorkspacePath(projectId, 'dist/index.html');
     if (!fs.existsSync(indexPath)) return res.status(404).send('Preview is not built yet. Run the project build first.');
-    return res.sendFile(indexPath);
+    const prefix = `/preview/${encodeURIComponent(projectId)}/`;
+    const html = fs.readFileSync(indexPath, 'utf8').replace(
+      /(src|href)=(["'])\/(?!\/)/g,
+      (_match, attribute, quote) => `${attribute}=${quote}${prefix}`
+    );
+    return res.type('html').send(html);
   } catch {
     return res.sendStatus(400);
   }
@@ -315,7 +320,14 @@ app.get('/preview/:id/*', (req, res) => {
     const target = resolveSafeWorkspacePath(projectId, path.posix.join('dist', requested));
     if (fs.existsSync(target) && fs.statSync(target).isFile()) return res.sendFile(target);
     const indexPath = resolveSafeWorkspacePath(projectId, 'dist/index.html');
-    if (fs.existsSync(indexPath)) return res.sendFile(indexPath);
+    if (fs.existsSync(indexPath)) {
+      const prefix = `/preview/${encodeURIComponent(projectId)}/`;
+      const html = fs.readFileSync(indexPath, 'utf8').replace(
+        /(src|href)=(["'])\/(?!\/)/g,
+        (_match, attribute, quote) => `${attribute}=${quote}${prefix}`
+      );
+      return res.type('html').send(html);
+    }
     return res.status(404).send('Preview asset not found.');
   } catch {
     return res.sendStatus(400);
