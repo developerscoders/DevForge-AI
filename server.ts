@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { PaymentProviderRegistry } from './src/lib/payment-abstraction.js';
 import { db as firestoreDb, auth as firestoreAuth } from './src/lib/firebase.js';
@@ -34,9 +33,6 @@ import { redactSecrets, ensureProjectWorkspaceDir, resolveSafeWorkspacePath } fr
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 // Apply CORS before every API route, including JSON parse failures and OPTIONS
@@ -251,13 +247,13 @@ app.put('/api/projects/:id', (req, res) => {
 
 // 1b. Project Files & Live Preview APIs
 app.get('/api/projects/:id/files', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) return res.status(404).json({ success: false, error: 'Project not found' });
   res.json({ success: true, count: project.files?.length || 0, files: project.files || [] });
 });
 
 app.get('/api/projects/:id/files/:filePath(*)', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) return res.status(404).json({ success: false, error: 'Project not found' });
   const targetPath = req.params.filePath;
   const file = project.files?.find((f: any) => f.path === targetPath);
@@ -315,7 +311,7 @@ app.get('/preview/:id', (req, res) => {
 app.get('/preview/:id/*', (req, res) => {
   const projectId = req.params.id;
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) return res.sendStatus(400);
-  const requested = String(req.params[0] || '').replace(/^\\/+/, '');
+  const requested = String(req.params[0] || '').replace(/^\/+/, '');
   try {
     const target = resolveSafeWorkspacePath(projectId, path.posix.join('dist', requested));
     if (fs.existsSync(target) && fs.statSync(target).isFile()) return res.sendFile(target);
@@ -335,7 +331,7 @@ app.get('/preview/:id/*', (req, res) => {
 });
 
 app.get('/api/projects/:id/preview', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) return res.status(404).json({ success: false, error: 'Project not found' });
   res.json({
     success: true,
