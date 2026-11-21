@@ -316,31 +316,25 @@ async function fetchFirestoreProjectFiles(projectId: string): Promise<FileNode[]
 async function persistFirestoreProjectFiles(projectId: string, files: FileNode[]): Promise<void> {
   const filesRef = collection(db, 'projects', projectId, PROJECT_FILE_COLLECTION);
   const existing = await getDocs(filesRef);
-  const desiredIds = new Set(files.filter((file) => file.type !== 'folder').map((file) => encodeURIComponent(file.path)));
-  const operations: Array<() => void> = [];
-
-  for (const file of files) {
-    if (file.type === 'folder' || typeof file.content !== 'string' || !file.path) continue;
-    const fileRef = doc(db, 'projects', projectId, PROJECT_FILE_COLLECTION, encodeURIComponent(file.path));
-    operations.push(() => {
-      const batch = writeBatch(db);
-      batch.set(fileRef, { ...file, projectId, updatedAt: new Date().toISOString() });
-      return batch.commit();
-    });
-  }
-  for (const existingFile of existing.docs) {
-    if (!desiredIds.has(existingFile.id)) {
-      const fileRef = doc(db, 'projects', projectId, PROJECT_FILE_COLLECTION, existingFile.id);
-      operations.push(() => {
-        const batch = writeBatch(db);
-        batch.delete(fileRef);
-        return batch.commit();
-      });
+  const desired = files.filter((file) => file.type !== 'folder' && typeof file.content === 'string' && file.path);
+  const desiredIds = new Set(desired.map((file) => encodeURIComponent(file.path)));
+  const writes: Array<{ ref: any; data?: any }> = desired.map((file) => ({
+    ref: doc(db, 'projects', projectId, PROJECT_FILE_COLLECTION, encodeURIComponent(file.path)),
+    data: { ...file, projectId, updatedAt: new Date().toISOString() },
+  }));
+  for (const oldFile of existing.docs) {
+    if (!desiredIds.has(oldFile.id)) {
+      writes.push({ ref: doc(db, 'projects', projectId, PROJECT_FILE_COLLECTION, oldFile.id) });
     }
   }
 
-  for (let offset = 0; offset < operations.length; offset += FIRESTORE_BATCH_LIMIT) {
-    await Promise.all(operations.slice(offset, offset + FIRESTORE_BATCH_LIMIT).map((operation) => operation()));
+  for (let offset = 0; offset < writes.length; offset += FIRESTORE_BATCH_LIMIT) {
+    const batch = writeBatch(db);
+    for (const write of writes.slice(offset, offset + FIRESTORE_BATCH_LIMIT)) {
+      if (write.data) batch.set(write.ref, write.data);
+      else batch.delete(write.ref);
+    }
+    await batch.commit();
   }
 }
 
