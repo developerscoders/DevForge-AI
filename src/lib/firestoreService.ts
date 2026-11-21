@@ -10,6 +10,7 @@ import {
   where,
   orderBy,
   onSnapshot,
+  writeBatch,
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import {
@@ -301,32 +302,67 @@ export const saveFirestoreCoupon = async (coupon: Coupon) => {
 // ==========================================
 // 3. Projects Firestore Operations
 // ==========================================
+const PROJECT_FILE_COLLECTION = 'files';
+const FIRESTORE_BATCH_LIMIT = 450;
+
+async function fetchFirestoreProjectFiles(projectId: string): Promise<FileNode[]> {
+  const snap = await getDocs(collection(db, 'projects', projectId, PROJECT_FILE_COLLECTION));
+  return snap.docs
+    .map((item) => item.data() as FileNode)
+    .filter((file) => typeof file.path === 'string' && typeof file.content === 'string')
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+async function persistFirestoreProjectFiles(projectId: string, files: FileNode[]): Promise<void> {
+  const filesRef = collection(db, 'projects', projectId, PROJECT_FILE_COLLECTION);
+  const existing = await getDocs(filesRef);
+  const desiredIds = new Set(files.filter((file) => file.type !== 'folder').map((file) => encodeURIComponent(file.path)));
+  const operations: Array<() => void> = [];
+
+  for (const file of files) {
+    if (file.type === 'folder' || typeof file.content !== 'string' || !file.path) continue;
+    const fileRef = doc(db, 'projects', projectId, PROJECT_FILE_COLLECTION, encodeURIComponent(file.path));
+    operations.push(() => {
+      const batch = writeBatch(db);
+      batch.set(fileRef, { ...file, projectId, updatedAt: new Date().toISOString() });
+      return batch.commit();
+    });
+  }
+  for (const existingFile of existing.docs) {
+    if (!desiredIds.has(existingFile.id)) {
+      const fileRef = doc(db, 'projects', projectId, PROJECT_FILE_COLLECTION, existingFile.id);
+      operations.push(() => {
+        const batch = writeBatch(db);
+        batch.delete(fileRef);
+        return batch.commit();
+      });
+    }
+  }
+
+  for (let offset = 0; offset < operations.length; offset += FIRESTORE_BATCH_LIMIT) {
+    await Promise.all(operations.slice(offset, offset + FIRESTORE_BATCH_LIMIT).map((operation) => operation()));
+  }
+}
+
 export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]> => {
   const localList = getLocalStoredProjects(userId);
-
-  if (isFirestoreQuotaExhausted()) {
-    return localList;
-  }
+  if (isFirestoreQuotaExhausted()) return localList;
 
   try {
     const coll = collection(db, 'projects');
     const q = userId ? query(coll, where('userId', '==', userId)) : coll;
     const snap = await getDocs(q);
-    const firestoreList: Project[] = [];
-    snap.forEach((d) => {
-      firestoreList.push({ id: d.id, ...d.data() } as Project);
-    });
+    const firestoreList = await Promise.all(snap.docs.map(async (d) => {
+      const data = d.data();
+      const files = await fetchFirestoreProjectFiles(d.id).catch(() => Array.isArray(data.files) ? data.files : []);
+      return { id: d.id, ...data, files } as Project;
+    }));
 
-    // Merge Firestore with local: If local has a newer version or unsynced project, keep it!
     const map = new Map<string, Project>();
-    for (const p of firestoreList) {
-      map.set(p.id, p);
-    }
+    for (const p of firestoreList) map.set(p.id, p);
     for (const p of localList) {
       const existing = map.get(p.id);
-      if (!existing || new Date(p.updatedAt || 0).getTime() > new Date(existing.updatedAt || 0).getTime()) {
-        map.set(p.id, p);
-      }
+      if (!existing || new Date(p.updatedAt || 0).getTime() > new Date(existing.updatedAt || 0).getTime()) map.set(p.id, p);
     }
     return Array.from(map.values()).sort(
       (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
@@ -341,22 +377,17 @@ export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]
 export const fetchFirestoreProjectById = async (projectId: string): Promise<Project | null> => {
   const localList = getLocalStoredProjects();
   const local = localList.find((p) => p.id === projectId) || null;
-
-  if (isFirestoreQuotaExhausted()) {
-    return local;
-  }
+  if (isFirestoreQuotaExhausted()) return local;
 
   try {
     const docRef = doc(db, 'projects', projectId);
     const snap = await getDoc(docRef);
-    if (snap.exists()) {
-      const remote = { id: snap.id, ...snap.data() } as Project;
-      if (local && new Date(local.updatedAt || 0).getTime() > new Date(remote.updatedAt || 0).getTime()) {
-        return local;
-      }
-      return remote;
-    }
-    return local;
+    if (!snap.exists()) return local;
+    const data = snap.data();
+    const files = await fetchFirestoreProjectFiles(projectId).catch(() => Array.isArray(data.files) ? data.files : []);
+    const remote = { id: snap.id, ...data, files } as Project;
+    if (local && new Date(local.updatedAt || 0).getTime() > new Date(remote.updatedAt || 0).getTime()) return local;
+    return remote;
   } catch (e: any) {
     if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     return local;
@@ -364,19 +395,27 @@ export const fetchFirestoreProjectById = async (projectId: string): Promise<Proj
 };
 
 export const saveFirestoreProject = async (project: Project, userId?: string) => {
-  // Always save locally so project data is 100% durable
+  // Keep a local recovery copy, but persist source files separately in Firestore so
+  // large generated projects cannot exceed Firestore's 1 MiB document limit.
   saveLocalStoredProject(project, userId);
-
   const currentUid = auth.currentUser?.uid || userId || project.userId;
-  if (!currentUid || isFirestoreQuotaExhausted()) {
-    return;
-  }
+  if (!currentUid || isFirestoreQuotaExhausted()) return;
 
   try {
+    const { files = [], ...metadata } = project;
     const docRef = doc(db, 'projects', project.id);
-    await safeFirestoreSetDoc(docRef, { ...project, userId: currentUid, updatedAt: new Date().toISOString() }, { merge: true });
+    const saved = await safeFirestoreSetDoc(docRef, {
+      ...metadata,
+      files: [],
+      fileCount: files.filter((file) => file.type !== 'folder').length,
+      userId: currentUid,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+    if (!saved || isFirestoreQuotaExhausted()) return;
+    await persistFirestoreProjectFiles(project.id, files);
   } catch (e: any) {
     if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
+    console.warn('[Firestore] Project/file persistence failed:', e?.message || e);
   }
 };
 
