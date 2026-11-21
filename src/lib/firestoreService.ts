@@ -348,7 +348,8 @@ export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]
     const snap = await getDocs(q);
     const firestoreList = await Promise.all(snap.docs.map(async (d) => {
       const data = d.data();
-      const files = await fetchFirestoreProjectFiles(d.id).catch(() => Array.isArray(data.files) ? data.files : []);
+      const storedFiles = await fetchFirestoreProjectFiles(d.id).catch(() => []);
+      const files = storedFiles.length > 0 ? storedFiles : (Array.isArray(data.files) ? data.files : []);
       return { id: d.id, ...data, files } as Project;
     }));
 
@@ -378,7 +379,8 @@ export const fetchFirestoreProjectById = async (projectId: string): Promise<Proj
     const snap = await getDoc(docRef);
     if (!snap.exists()) return local;
     const data = snap.data();
-    const files = await fetchFirestoreProjectFiles(projectId).catch(() => Array.isArray(data.files) ? data.files : []);
+    const storedFiles = await fetchFirestoreProjectFiles(projectId).catch(() => []);
+    const files = storedFiles.length > 0 ? storedFiles : (Array.isArray(data.files) ? data.files : []);
     const remote = { id: snap.id, ...data, files } as Project;
     if (local && new Date(local.updatedAt || 0).getTime() > new Date(remote.updatedAt || 0).getTime()) return local;
     return remote;
