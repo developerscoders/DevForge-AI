@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Agent, SubAgent, Project, TestQualityAudit } from '../types';
+import {
+  Agent,
+  Project,
+  TestQualityAudit,
+  ExecutionRun,
+  ToolExecutionRecord,
+  TaskNode,
+} from '../types';
 import { ARIA_SYSTEM_INSTRUCTIONS, ARIA_TOOL_DECLARATIONS, FIXED_SWARM_ROSTER } from '../lib/ariaOrchestratorEngine';
 import { AGENT_ROSTER } from '../config/agentRoster';
 import {
@@ -11,7 +18,6 @@ import {
   ChevronRight,
   ChevronDown,
   Activity,
-  Cpu,
   ShieldCheck,
   Sparkles,
   AlertTriangle,
@@ -22,15 +28,13 @@ import {
   Wrench,
   CheckCircle2,
   Users,
-  Server,
-  FileText,
   Copy,
   Check,
-  ExternalLink,
   Code2,
-  FileCode,
+  FileText,
   X,
-  Target
+  Target,
+  MessageSquare,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -58,7 +62,7 @@ const defaultAgentPrompts: Record<string, { prompt: string; model: string; artif
   'ag_qa': {
     prompt: 'Runtime prompt loaded from agents/quinn.md when the milestone is dispatched.',
     model: `Groq (${AGENT_ROSTER.quinn.defaultModel})`,
-    artifact: 'tests/app.test.ts (100% Assertions Green, 0 Security Alerts)'
+    artifact: 'tests/app.test.ts (Real Assertions & Security Audit)'
   },
   'ag_sre': {
     prompt: 'Runtime prompt loaded from agents/devon.md when the milestone is dispatched.',
@@ -71,13 +75,22 @@ interface AgentOrchestrationGraphProps {
   agents: Agent[];
   projectId?: string;
   project?: Project;
+  executionRun?: ExecutionRun | null;
   onRefresh?: () => void;
 }
 
-export default function AgentOrchestrationGraph({ agents, projectId, project, onRefresh }: AgentOrchestrationGraphProps) {
+export default function AgentOrchestrationGraph({
+  agents,
+  projectId,
+  project,
+  executionRun,
+  onRefresh,
+}: AgentOrchestrationGraphProps) {
   const [activeAgents, setActiveAgents] = useState<Agent[]>(agents);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(agents[0]?.id || null);
-  const [inspectorTab, setInspectorTab] = useState<'logs' | 'prompt' | 'audit'>('prompt');
+  const [inspectorTab, setInspectorTab] = useState<'prompt' | 'logs' | 'tools' | 'comms' | 'audit'>('prompt');
+  const [toolFilterScope, setToolFilterScope] = useState<'agent' | 'all'>('all');
+  const [expandedToolIds, setExpandedToolIds] = useState<Record<string, boolean>>({});
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [showAriaModal, setShowAriaModal] = useState(false);
   const [isRunningCoverage, setIsRunningCoverage] = useState(false);
@@ -91,6 +104,11 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
   });
   const [isHealingLoading, setIsHealingLoading] = useState(false);
   const [healingAlert, setHealingAlert] = useState<string | null>(null);
+
+  const run = executionRun || project?.lastExecutionRun || null;
+  const allToolExecutions: ToolExecutionRecord[] = run?.toolExecutions || [];
+  const allTasks: TaskNode[] = run?.tasks || [];
+  const allComms = run?.communications || [];
 
   // Sync when prop changes
   useEffect(() => {
@@ -159,99 +177,98 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
     groq: { label: 'Groq Free Tier', bg: 'bg-orange-500/10', text: 'text-orange-400', border: 'border-orange-500/20' },
   };
 
-  // Trigger interactive self-healing simulation with live stage-by-stage visual animation
+  // Execute real backend diagnostics & targeted self-healing remediation
   const handleTriggerSelfHealing = async () => {
+    if (!projectId) return;
     try {
       setIsHealingLoading(true);
-
-      // Phase 1: Simulate Subagent & Senior Lead Failure
-      setHealingAlert('⚠️ [Phase 1/4: Failure Detected] Subagent encountered syntax divergence in React component tree.');
-      setActiveAgents((prev) =>
-        prev.map((a) => {
-          if (a.tier === 'senior' || a.id === 'ag_fe') {
-            return {
-              ...a,
-              status: 'failed',
-              validationStatus: 'rejection_healing',
-              subagents: a.subagents?.map((sub, i) =>
-                i === 0 ? { ...sub, status: 'failed', task: 'Syntax divergence detected' } : sub
-              )
-            };
-          }
-          return a;
-        })
-      );
-
-      // Phase 2: CEO Aria intercepts and analyzes root cause
-      await new Promise((r) => setTimeout(r, 1200));
-      setHealingAlert('⚡ [Phase 2/4: CEO Intercept] CEO Aria diagnosed root-cause: dependency boundary issue. Directing patch...');
-      setActiveAgents((prev) =>
-        prev.map((a) => {
-          if (a.tier === 'ceo') {
-            return { ...a, status: 'active', currentTask: 'Dispatching hotfix patch directive to Senior Lead' };
-          }
-          return a;
-        })
-      );
-
-      // Phase 3: Senior Lead dispatches hotfix and validates imports
-      await new Promise((r) => setTimeout(r, 1200));
-      setHealingAlert('🛠️ [Phase 3/4: Patching] Senior Lead applying verified error boundary and package resolution (lucide-react@^0.460.0)...');
-      setActiveAgents((prev) =>
-        prev.map((a) => {
-          if (a.tier === 'senior' || a.id === 'ag_fe') {
-            return {
-              ...a,
-              status: 'healing',
-              subagents: a.subagents?.map((sub) => ({
-                ...sub,
-                status: 'healing',
-                task: 'Re-hydrating state & verifying component syntax'
-              }))
-            };
-          }
-          return a;
-        })
-      );
-
-      // Call backend API in parallel to log to SRE streams
-      if (projectId) {
-        fetch(`/api/projects/${projectId}/trigger-healing`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        }).catch((e) => console.warn('Backend healing trigger notice:', e));
+      setHealingAlert('Running real AST, TypeScript, and Step 2b test coverage diagnostics...');
+      const res = await fetch(`/api/projects/${projectId}/trigger-healing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setHealingAlert(`Self-healing failed: ${data.error || res.statusText}`);
+      } else {
+        setHealingAlert(data.message || (data.healed ? 'Diagnostics & remediation passed.' : 'Remediation recorded.'));
+        if (data.project?.agents) {
+          setActiveAgents(data.project.agents);
+        }
+        if (data.project?.testQualityAudit) {
+          setLocalAudit(data.project.testQualityAudit);
+        }
       }
-
-      // Phase 4: Full Recovery and Validation
-      await new Promise((r) => setTimeout(r, 1200));
-      const healedTime = new Date().toLocaleTimeString();
-      setHealingAlert(`✓ [Phase 4/4: Fully Healed] Subagent healed & verified 100% operational by CEO Aria at ${healedTime}!`);
-      setActiveAgents((prev) =>
-        prev.map((a) => ({
-          ...a,
-          status: 'complete',
-          validationStatus: 'validated',
-          subagents: a.subagents?.map((sub) => ({
-            ...sub,
-            status: 'complete',
-            task: 'Component tree pure and verified',
-            healingSummary: `Auto-healed by CEO directive at ${healedTime}`
-          }))
-        }))
-      );
-
       if (onRefresh) onRefresh();
     } catch (e: any) {
-      setHealingAlert(`Self-healing trigger notice: ${e.message}`);
+      setHealingAlert(`Self-healing error: ${e.message}`);
     } finally {
       setIsHealingLoading(false);
-      setTimeout(() => setHealingAlert(null), 7000);
+      setTimeout(() => setHealingAlert(null), 8000);
     }
   };
 
+  const dagDisplayNodes =
+    allTasks.length > 0
+      ? allTasks.map((t, idx) => ({
+          id: t.id,
+          step: String(idx + 1).padStart(2, '0'),
+          title: t.title,
+          lead: t.agentName,
+          status: t.status,
+          dependsOn: t.dependsOn || [],
+          durationMs: t.durationMs,
+          agentId: t.agentId,
+        }))
+      : activeAgents.map((a, idx) => ({
+          id: a.id,
+          step: String(idx + 1).padStart(2, '0'),
+          title: a.currentTask ? a.currentTask.slice(0, 26) : a.role,
+          lead: a.name,
+          status:
+            a.status === 'complete'
+              ? ('completed' as const)
+              : a.status === 'active' || a.status === 'thinking' || a.status === 'healing'
+              ? ('running' as const)
+              : a.status === 'failed'
+              ? ('failed' as const)
+              : ('pending' as const),
+          dependsOn: idx > 0 ? [activeAgents[idx - 1].id] : [],
+          durationMs: a.executionLatencyMs,
+          agentId: a.id,
+        }));
+
+  const taskStatusBadge = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return { border: 'border-emerald-500/40', text: 'text-emerald-400', label: 'DONE' };
+      case 'running':
+        return { border: 'border-violet-500 animate-pulse', text: 'text-violet-300', label: 'RUN' };
+      case 'awaiting_approval':
+        return { border: 'border-amber-500/60', text: 'text-amber-300', label: 'GATE' };
+      case 'failed':
+        return { border: 'border-rose-500/60', text: 'text-rose-400', label: 'FAIL' };
+      case 'cancelled':
+        return { border: 'border-slate-600', text: 'text-slate-400', label: 'STOP' };
+      case 'blocked':
+        return { border: 'border-slate-800', text: 'text-slate-500', label: 'WAIT' };
+      default:
+        return { border: 'border-[#26262b]', text: 'text-slate-500', label: 'QUEUED' };
+    }
+  };
+
+  const agentTools = (agentId: string) =>
+    allToolExecutions.filter(
+      (t) =>
+        t.agentId === agentId ||
+        (agentId === 'ag_fe' && t.agentId === 'ag_coder') ||
+        (agentId === 'ag_coder' && t.agentId === 'ag_fe')
+    );
+
   return (
     <div className="space-y-6 text-slate-100" id="agent-orchestration-graph">
-      
+
       {/* Top Banner: Swarm Status & Self-Healing Action Bar */}
       <div className="bg-[#111111] border border-[#222222] p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center space-x-3">
@@ -259,16 +276,28 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
             <Layers className="w-5 h-5 text-violet-400" />
           </div>
           <div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2 flex-wrap gap-y-1">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-100">
-                Hierarchical Multi-Agent Swarm (6 Agents + Subagent Pods)
+                Multi-Agent &amp; Subagent DAG Orchestrator ({activeAgents.length} Leads + Dynamic Subagents)
               </h2>
-              <span className="text-[9px] font-mono px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase tracking-widest font-bold">
-                CEO VALIDATED
+              <span
+                className={`text-[9px] font-mono px-2 py-0.5 border uppercase tracking-widest font-bold ${
+                  project?.status === 'deployed'
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    : project?.status === 'failed'
+                    ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                    : 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+                }`}
+              >
+                {project?.status === 'deployed'
+                  ? 'CEO CERTIFIED'
+                  : run?.status?.toUpperCase() || project?.status?.toUpperCase() || 'ACTIVE'}
               </span>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              CEO Orchestrator delegates to 5 Senior Leads across Gemini, OpenRouter, NVIDIA, and Groq.
+              {run
+                ? `Run ${run.runId} • Tasks: ${run.metrics.completedTasks}/${run.metrics.totalTasks} • Tools: ${run.metrics.succeededToolCalls}/${run.metrics.totalToolCalls} succeeded`
+                : 'CEO Orchestrator executes dependency DAG, dynamic subagents, and verified tool invocations.'}
             </p>
           </div>
         </div>
@@ -280,7 +309,7 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
             id="btn-aria-instructions"
           >
             <ShieldCheck className="w-3.5 h-3.5 text-violet-400" />
-            <span>Aria System Instructions & Roster</span>
+            <span>Aria System Instructions &amp; Roster</span>
           </button>
 
           <button
@@ -290,40 +319,37 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
             id="btn-trigger-healing"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isHealingLoading ? 'animate-spin' : ''}`} />
-            <span>{isHealingLoading ? 'Intervening...' : 'Simulate Failure & Self-Heal'}</span>
+            <span>{isHealingLoading ? 'Running Diagnostics...' : 'Run Real Self-Healing'}</span>
           </button>
         </div>
       </div>
 
-      {/* Swarm Execution Milestones Stepper */}
+      {/* Live Execution DAG Nodes Stepper */}
       <div className="bg-[#0b0b0d] border border-[#222222] p-4 overflow-x-auto">
-        <div className="flex items-center justify-between min-w-[700px] gap-2">
-          {[
-            { step: '01', title: 'Strategic PRD', lead: 'Parker Lead', model: 'Claude 3.5', icon: CheckCircle2, status: 'complete' },
-            { step: '02', title: 'Architecture', lead: 'Sophia Lead', model: 'GPT-4o Mini', icon: CheckCircle2, status: 'complete' },
-            { step: '03', title: 'React Synthesizer', lead: 'Frank Lead', model: 'LLaMA 3.1 70B', icon: CheckCircle2, status: 'complete' },
-            { step: '04', title: 'CEO Cross-Heal', lead: 'Aria CEO', model: 'Gemini 2.5', icon: Sparkles, status: 'complete' },
-            { step: '05', title: 'QA & Security', lead: 'Quinn Lead', model: 'LLaMA 3.3 70B', icon: ShieldCheck, status: 'complete' },
-            { step: '06', title: 'SRE Docker Ingress', lead: 'Devon Lead', model: 'Mixtral 8x7B', icon: Server, status: 'complete' },
-          ].map((m, idx) => {
-            const Icon = m.icon;
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 min-w-[780px]">
+          {dagDisplayNodes.map((node) => {
+            const style = taskStatusBadge(node.status);
             return (
-              <div key={idx} className="flex-1 flex items-center">
-                <div className="bg-[#141416] border border-violet-500/30 hover:border-violet-500 p-2.5 rounded flex-1 transition">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[9px] font-mono text-violet-400 font-bold">M-{m.step}</span>
-                    <Icon className="w-3 h-3 text-emerald-400" />
-                  </div>
-                  <div className="text-[11px] font-bold text-slate-200 uppercase tracking-wide mt-1 truncate">{m.title}</div>
-                  <div className="text-[9px] font-mono text-slate-400 mt-0.5 flex items-center justify-between">
-                    <span>{m.lead}</span>
-                    <span className="text-indigo-300 text-[8px]">{m.model}</span>
-                  </div>
+              <button
+                key={node.id}
+                type="button"
+                onClick={() => setSelectedAgentId(node.agentId)}
+                className={`text-left bg-[#141416] border ${style.border} hover:border-violet-400 p-2.5 rounded transition`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-mono text-violet-400 font-bold">DAG-{node.step}</span>
+                  <span className={`text-[8px] font-mono font-bold ${style.text}`}>{style.label}</span>
                 </div>
-                {idx < 5 && (
-                  <ArrowRight className="w-3.5 h-3.5 text-slate-600 mx-1 shrink-0" />
-                )}
-              </div>
+                <div className="text-[11px] font-bold text-slate-200 uppercase tracking-wide mt-1 truncate" title={node.title}>
+                  {node.title}
+                </div>
+                <div className="text-[9px] font-mono text-slate-400 mt-1 flex items-center justify-between">
+                  <span className="truncate max-w-[72px]">{node.lead.split(' ')[0]}</span>
+                  <span className="text-slate-500 text-[8px]">
+                    {node.durationMs !== undefined ? `${node.durationMs}ms` : node.dependsOn.length > 0 ? `deps:${node.dependsOn.length}` : 'root'}
+                  </span>
+                </div>
+              </button>
             );
           })}
         </div>
@@ -390,20 +416,20 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                 </div>
 
                 <div className="text-right">
-                  <span className={`text-[9px] font-mono font-bold px-2 py-1 uppercase tracking-wider border ${statusColors[ceoAgent.status || 'complete']}`}>
-                    {ceoAgent.status || 'complete'}
+                  <span className={`text-[9px] font-mono font-bold px-2 py-1 uppercase tracking-wider border ${statusColors[ceoAgent.status || 'idle']}`}>
+                    {ceoAgent.status || 'idle'}
                   </span>
-                  <div className="text-[9px] text-emerald-400 font-mono mt-1 font-bold">
-                    ✓ Validated All Milestones
+                  <div className="text-[9px] text-slate-400 font-mono mt-1 font-bold">
+                    {agentTools(ceoAgent.id).length} tool calls
                   </div>
                 </div>
               </div>
 
               {/* CEO Directives Snippet */}
-              <div className="mt-3 pt-3 border-t border-[#222222] bg-[#080808] p-2.5 font-mono text-[10px] text-slate-400 flex items-center justify-between">
+              <div className="mt-3 pt-3 border-t border-[#222222] bg-[#080808] p-2.5 font-mono text-[10px] text-slate-400 flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center space-x-1.5 text-violet-300">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>CEO Protocol: Autonomous task delegation with real-time error intervention</span>
+                  <span>{ceoAgent.currentTask || 'Orchestrating multi-agent DAG & Final Gate audits'}</span>
                 </div>
                 <span className="text-[9px] text-slate-500 uppercase tracking-wider">Tier 1 Executive</span>
               </div>
@@ -501,42 +527,109 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
 
                       <div className="grid gap-2">
                         {agent.subagents.map((sub) => {
-                          const SubIcon = statusIcons[sub.status] || Bot;
+                          const subTools = allToolExecutions.filter((t) => t.subagentId === sub.id);
                           return (
                             <div
                               key={sub.id}
-                              className="bg-[#0f0f0f] border border-[#222222] p-2.5 flex items-start justify-between text-xs"
+                              className="bg-[#0f0f0f] border border-[#222222] p-2.5 flex flex-col gap-1.5 text-xs"
                             >
-                              <div className="space-y-1">
-                                <div className="flex items-center space-x-2">
-                                  <span className="font-bold text-[11px] text-slate-200">{sub.name}</span>
-                                  <span className="text-[8px] font-mono text-slate-400 bg-[#181818] border border-[#262626] px-1 py-0.2">
-                                    {sub.role}
-                                  </span>
-                                </div>
-                                <div className="text-[10px] text-slate-400 font-mono">
-                                  Task: {sub.task}
-                                </div>
-                                {sub.instructionsReceived && sub.instructionsReceived.length > 0 && (
-                                  <div className="text-[9px] font-mono text-violet-300 bg-violet-950/30 border border-violet-500/20 p-1 mt-1">
-                                    <span className="font-bold text-violet-400">Lead Directive:</span> {sub.instructionsReceived[sub.instructionsReceived.length - 1]}
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="space-y-1">
+                                  <div className="flex items-center space-x-2 flex-wrap">
+                                    <span className="font-bold text-[11px] text-slate-200">{sub.name}</span>
+                                    <span className="text-[8px] font-mono text-slate-400 bg-[#181818] border border-[#262626] px-1 py-0.2">
+                                      {sub.role}
+                                    </span>
+                                    {sub.depth !== undefined && (
+                                      <span className="text-[8px] font-mono text-cyan-400">depth:{sub.depth}</span>
+                                    )}
                                   </div>
-                                )}
-                                {sub.healingSummary && (
-                                  <div className="text-[9px] font-mono text-cyan-300 bg-cyan-950/30 border border-cyan-500/20 p-1 mt-1 flex items-center space-x-1">
-                                    <Wrench className="w-3 h-3 text-cyan-400" />
-                                    <span>{sub.healingSummary}</span>
+                                  <div className="text-[10px] text-slate-400 font-mono">
+                                    Task: {sub.task}
                                   </div>
-                                )}
+                                  {sub.instructionsReceived && sub.instructionsReceived.length > 0 && (
+                                    <div className="text-[9px] font-mono text-violet-300 bg-violet-950/30 border border-violet-500/20 p-1 mt-1">
+                                      <span className="font-bold text-violet-400">Directive:</span> {sub.instructionsReceived[sub.instructionsReceived.length - 1]}
+                                    </div>
+                                  )}
+                                  {sub.healingSummary && (
+                                    <div className="text-[9px] font-mono text-cyan-300 bg-cyan-950/30 border border-cyan-500/20 p-1 mt-1 flex items-center space-x-1">
+                                      <Wrench className="w-3 h-3 text-cyan-400" />
+                                      <span>{sub.healingSummary}</span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 uppercase border shrink-0 ${statusColors[sub.status] || statusColors.idle}`}>
+                                  {sub.status}
+                                </span>
                               </div>
 
-                              <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 uppercase border ${statusColors[sub.status]}`}>
-                                {sub.status}
-                              </span>
+                              {subTools.length > 0 && (
+                                <div className="flex flex-wrap gap-1 pt-1 border-t border-[#1b1b1f]">
+                                  {subTools.map((st) => (
+                                    <button
+                                      key={st.executionId}
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedAgentId(agent.id);
+                                        setInspectorTab('tools');
+                                        setToolFilterScope('agent');
+                                        setExpandedToolIds((prev) => ({ ...prev, [st.executionId]: true }));
+                                      }}
+                                      className={`text-[9px] font-mono px-1.5 py-0.5 border flex items-center gap-1 ${
+                                        st.status === 'success'
+                                          ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                                          : st.status === 'failed'
+                                          ? 'bg-rose-950/30 border-rose-500/30 text-rose-300'
+                                          : 'bg-amber-950/30 border-amber-500/30 text-amber-300'
+                                      }`}
+                                    >
+                                      <Wrench className="w-2.5 h-2.5" />
+                                      <span>{st.toolName}</span>
+                                      {st.durationMs !== undefined && <span className="opacity-70">{st.durationMs}ms</span>}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
                       </div>
+
+                      {/* Direct Lead Tool Invocations */}
+                      {agentTools(agent.id).filter((t) => !t.subagentId).length > 0 && (
+                        <div className="pt-1.5 border-t border-[#1a1a1a]">
+                          <div className="text-[9px] font-mono text-slate-500 uppercase mb-1">Lead Tool Calls:</div>
+                          <div className="flex flex-wrap gap-1">
+                            {agentTools(agent.id)
+                              .filter((t) => !t.subagentId)
+                              .map((lt) => (
+                                <button
+                                  key={lt.executionId}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedAgentId(agent.id);
+                                    setInspectorTab('tools');
+                                    setToolFilterScope('agent');
+                                    setExpandedToolIds((prev) => ({ ...prev, [lt.executionId]: true }));
+                                  }}
+                                  className={`text-[9px] font-mono px-1.5 py-0.5 border flex items-center gap-1 ${
+                                    lt.status === 'success'
+                                      ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                                      : lt.status === 'failed'
+                                      ? 'bg-rose-950/30 border-rose-500/30 text-rose-300'
+                                      : 'bg-amber-950/30 border-amber-500/30 text-amber-300'
+                                  }`}
+                                >
+                                  <Wrench className="w-2.5 h-2.5" />
+                                  <span>{lt.toolName}</span>
+                                  {lt.durationMs !== undefined && <span className="opacity-70">{lt.durationMs}ms</span>}
+                                </button>
+                              ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -589,33 +682,57 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                   </div>
                 )}
 
-                {/* Tab Switcher: Multi-LLM Prompt vs Swarm Logs vs Test Quality Audit */}
+                {/* Tab Switcher: Prompt, Logs, Tool Calls, DAG Comms, Final Gate Audit */}
                 <div className="mt-4 flex items-center space-x-1 border-b border-[#222222] pb-2 overflow-x-auto">
                   <button
                     onClick={() => setInspectorTab('prompt')}
-                    className={`flex items-center space-x-1.5 px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition shrink-0 ${
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition shrink-0 ${
                       inspectorTab === 'prompt'
                         ? 'bg-violet-600/30 text-violet-300 border border-violet-500/50'
                         : 'text-slate-400 hover:text-white'
                     }`}
                   >
                     <Code2 className="w-3.5 h-3.5" />
-                    <span>Assigned Prompt & Model</span>
+                    <span>Prompt &amp; Model</span>
                   </button>
                   <button
                     onClick={() => setInspectorTab('logs')}
-                    className={`flex items-center space-x-1.5 px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition shrink-0 ${
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition shrink-0 ${
                       inspectorTab === 'logs'
                         ? 'bg-violet-600/30 text-violet-300 border border-violet-500/50'
                         : 'text-slate-400 hover:text-white'
                     }`}
                   >
                     <Terminal className="w-3.5 h-3.5" />
-                    <span>Swarm Logs ({selectedAgent.outputLogs.length})</span>
+                    <span>Logs ({selectedAgent.outputLogs.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setInspectorTab('tools')}
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition shrink-0 ${
+                      inspectorTab === 'tools'
+                        ? 'bg-cyan-600/20 text-cyan-300 border border-cyan-500/40'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    id="tab-inspector-tools"
+                  >
+                    <Wrench className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Tools ({allToolExecutions.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setInspectorTab('comms')}
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition shrink-0 ${
+                      inspectorTab === 'comms'
+                        ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/40'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    id="tab-inspector-comms"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>DAG &amp; Comms ({allComms.length})</span>
                   </button>
                   <button
                     onClick={() => setInspectorTab('audit')}
-                    className={`flex items-center space-x-1.5 px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition shrink-0 ${
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition shrink-0 ${
                       inspectorTab === 'audit'
                         ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40'
                         : 'text-slate-400 hover:text-white'
@@ -623,7 +740,7 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                     id="tab-inspector-audit"
                   >
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Final Gate: Test Quality Audit (Step 2b)</span>
+                    <span>Audit</span>
                     {localAudit && (
                       <span className={`text-[8px] px-1 py-0.2 border ml-1 ${localAudit.verdict === 'pass' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10'}`}>
                         {localAudit.verdict === 'pass' ? `${localAudit.lineCoverage}%` : 'FLAGGED'}
@@ -634,7 +751,6 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
 
                 {inspectorTab === 'prompt' ? (
                   <div className="mt-3 space-y-3 font-mono text-[11px]">
-                    {/* Model & Provider metadata banner */}
                     <div className="bg-[#09090b] border border-[#222222] p-2.5 flex items-center justify-between text-[10px]">
                       <div className="flex items-center space-x-2">
                         <span className="text-slate-400 uppercase tracking-wider">Multi-LLM Engine:</span>
@@ -656,25 +772,36 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                       </button>
                     </div>
 
-                    {/* Assigned Prompt Code Box */}
+                    {selectedAgent.allowedTools && selectedAgent.allowedTools.length > 0 && (
+                      <div className="bg-[#09090b] border border-[#222222] p-2.5 text-[10px]">
+                        <div className="text-slate-400 uppercase text-[9px] mb-1">RBAC Permitted Tools ({selectedAgent.allowedTools.length}):</div>
+                        <div className="flex flex-wrap gap-1">
+                          {selectedAgent.allowedTools.map((toolName) => (
+                            <span key={toolName} className="px-1.5 py-0.5 bg-[#16161a] border border-[#2a2a32] text-cyan-300 text-[9px]">
+                              {toolName}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase tracking-wider">
-                        <span>Code Writing & Task Directive:</span>
-                        <span className="text-violet-400 text-[9px]">Autonomous Execution</span>
+                        <span>Task Directive:</span>
+                        <span className="text-violet-400 text-[9px]">Orchestrator Dispatched</span>
                       </div>
-                      <div className="bg-[#050505] p-3 border border-[#222222] text-slate-300 whitespace-pre-wrap leading-relaxed h-[135px] overflow-y-auto text-[10px] shadow-inner select-text">
+                      <div className="bg-[#050505] p-3 border border-[#222222] text-slate-300 whitespace-pre-wrap leading-relaxed h-[125px] overflow-y-auto text-[10px] shadow-inner select-text">
                         {selectedAgent.assignedPrompt || defaultAgentPrompts[selectedAgent.id]?.prompt || '// Standing by for CEO prompt dispatch...'}
                       </div>
                     </div>
 
-                    {/* Generated Artifact Banner */}
                     <div className="bg-violet-950/20 border border-violet-500/30 p-2.5 text-[10px]">
                       <div className="text-violet-400 font-bold uppercase tracking-wider flex items-center space-x-1.5 mb-1">
                         <FileText className="w-3.5 h-3.5 text-violet-400" />
                         <span>Generated Deliverable / Artifact:</span>
                       </div>
                       <div className="text-slate-200">
-                        {selectedAgent.generatedArtifact || defaultAgentPrompts[selectedAgent.id]?.artifact || 'Project source files, schemas, and verification suites'}
+                        {selectedAgent.generatedArtifact || defaultAgentPrompts[selectedAgent.id]?.artifact || 'Pending artifact synthesis'}
                       </div>
                     </div>
                   </div>
@@ -683,15 +810,15 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                     <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 uppercase tracking-wider">
                       <div className="flex items-center space-x-2">
                         <Terminal className="w-3.5 h-3.5 text-violet-400" />
-                        <span>Swarm Logs & Directives</span>
+                        <span>Agent Execution Logs</span>
                       </div>
                       <span className="text-slate-500">{selectedAgent.outputLogs.length} Entries</span>
                     </div>
 
-                    <div className="bg-[#050505] p-3.5 border border-[#222222] font-mono text-xs h-[230px] overflow-y-auto space-y-2.5 shadow-inner">
+                    <div className="bg-[#050505] p-3.5 border border-[#222222] font-mono text-xs h-[250px] overflow-y-auto space-y-2.5 shadow-inner">
                       {selectedAgent.outputLogs.length === 0 ? (
                         <div className="text-slate-600 text-center py-16 uppercase tracking-wider text-[11px]">
-                          // Standing by for CEO delegation stream...
+                          // Waiting for task execution...
                         </div>
                       ) : (
                         selectedAgent.outputLogs.map((log, idx) => {
@@ -712,12 +839,141 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                       )}
                     </div>
                   </div>
+                ) : inspectorTab === 'tools' ? (
+                  /* REAL TOOL CALLS INSPECTOR TAB */
+                  <div className="mt-3 space-y-2 font-mono text-[10px]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 uppercase tracking-wider">Tool Invocation History</span>
+                      <div className="flex items-center border border-[#2a2a30] bg-[#08080a]">
+                        <button
+                          type="button"
+                          onClick={() => setToolFilterScope('all')}
+                          className={`px-2 py-0.5 uppercase ${toolFilterScope === 'all' ? 'bg-violet-600 text-white' : 'text-slate-400'}`}
+                        >
+                          All ({allToolExecutions.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setToolFilterScope('agent')}
+                          className={`px-2 py-0.5 uppercase ${toolFilterScope === 'agent' ? 'bg-violet-600 text-white' : 'text-slate-400'}`}
+                        >
+                          Agent ({agentTools(selectedAgent.id).length})
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#050505] border border-[#222222] p-2.5 h-[265px] overflow-y-auto space-y-2">
+                      {(toolFilterScope === 'agent' ? agentTools(selectedAgent.id) : allToolExecutions).length === 0 ? (
+                        <div className="text-slate-600 text-center py-16 uppercase tracking-wider">
+                          // No tool calls recorded yet
+                        </div>
+                      ) : (
+                        (toolFilterScope === 'agent' ? agentTools(selectedAgent.id) : allToolExecutions).map((rec) => {
+                          const open = !!expandedToolIds[rec.executionId];
+                          return (
+                            <div key={rec.executionId} className="border border-[#222228] bg-[#0d0d11] p-2 space-y-1">
+                              <button
+                                type="button"
+                                onClick={() => setExpandedToolIds((prev) => ({ ...prev, [rec.executionId]: !prev[rec.executionId] }))}
+                                className="w-full flex items-center justify-between text-left gap-2"
+                              >
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {open ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
+                                  <span className="text-cyan-300 font-bold">{rec.toolName}</span>
+                                  <span className="text-slate-500">({rec.agentName})</span>
+                                  <span
+                                    className={`px-1 py-0.2 border uppercase text-[8px] ${
+                                      rec.status === 'success'
+                                        ? 'border-emerald-500/40 text-emerald-400'
+                                        : rec.status === 'failed'
+                                        ? 'border-rose-500/40 text-rose-400'
+                                        : 'border-amber-500/40 text-amber-300'
+                                    }`}
+                                  >
+                                    {rec.status}
+                                  </span>
+                                </div>
+                                <span className="text-slate-500 shrink-0">
+                                  {rec.durationMs !== undefined ? `${rec.durationMs}ms` : '...'}
+                                </span>
+                              </button>
+                              {open && (
+                                <div className="pt-1.5 border-t border-[#1e1e24] space-y-1.5 text-[9px]">
+                                  <div className="text-slate-500">ID: {rec.executionId} • Retries: {rec.retries}</div>
+                                  <div>
+                                    <div className="text-slate-400">Input Args:</div>
+                                    <pre className="bg-black p-1.5 border border-[#1d1d22] text-slate-300 overflow-x-auto max-h-24">
+                                      {JSON.stringify(rec.inputArgs, null, 2)}
+                                    </pre>
+                                  </div>
+                                  {rec.stdout && (
+                                    <div>
+                                      <div className="text-emerald-400">Stdout:</div>
+                                      <pre className="bg-black p-1.5 border border-[#1d1d22] text-emerald-300 overflow-x-auto max-h-24">
+                                        {rec.stdout}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {rec.stderr && (
+                                    <div>
+                                      <div className="text-amber-400">Stderr:</div>
+                                      <pre className="bg-black p-1.5 border border-[#1d1d22] text-amber-300 overflow-x-auto max-h-24">
+                                        {rec.stderr}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {rec.error && (
+                                    <div className="text-rose-400 bg-rose-950/20 p-1.5 border border-rose-500/30">
+                                      {rec.error}
+                                    </div>
+                                  )}
+                                  {rec.output !== undefined && (
+                                    <div>
+                                      <div className="text-sky-400">Output:</div>
+                                      <pre className="bg-black p-1.5 border border-[#1d1d22] text-slate-300 overflow-x-auto max-h-28">
+                                        {JSON.stringify(rec.output, null, 2)}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                ) : inspectorTab === 'comms' ? (
+                  /* DAG & INTER-AGENT COMMUNICATIONS TAB */
+                  <div className="mt-3 space-y-2 font-mono text-[10px]">
+                    <div className="text-slate-400 uppercase tracking-wider">
+                      Agent Communications &amp; Context Handoffs ({allComms.length})
+                    </div>
+                    <div className="bg-[#050505] border border-[#222222] p-2.5 h-[265px] overflow-y-auto space-y-2">
+                      {allComms.length === 0 ? (
+                        <div className="text-slate-600 text-center py-16 uppercase tracking-wider">
+                          // No inter-agent messages recorded yet
+                        </div>
+                      ) : (
+                        allComms.map((msg) => (
+                          <div key={msg.id} className="border border-[#202026] bg-[#0c0c10] p-2 space-y-1">
+                            <div className="flex items-center justify-between text-[9px]">
+                              <span className="text-violet-300 font-bold">
+                                {msg.fromAgentName} → {msg.toAgentName}
+                              </span>
+                              <span className="px-1.5 py-0.2 bg-indigo-950/40 border border-indigo-500/30 text-indigo-300 uppercase">
+                                {msg.type}
+                              </span>
+                            </div>
+                            <div className="text-slate-300 text-[10px]">{msg.summary}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
                 ) : (
-                  /* ==================================================== */
                   /* STEP 2b: INDEPENDENT TEST QUALITY AUDIT INSPECTOR TAB */
-                  /* ==================================================== */
                   <div className="mt-3 space-y-3 font-mono text-[11px]">
-                    {/* Coverage Floor Overview */}
                     <div className="bg-[#09090b] border border-[#222222] p-3 space-y-2.5">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2">
@@ -727,9 +983,11 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                           </span>
                         </div>
                         <span className={`px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider border ${
-                          (localAudit?.verdict === 'pass' || !localAudit)
+                          localAudit?.verdict === 'pass'
                             ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                            : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                            : localAudit
+                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                            : 'bg-slate-900 text-slate-400 border-slate-700'
                         }`}>
                           {localAudit ? localAudit.verdict.toUpperCase() : 'PENDING AUDIT'}
                         </span>
@@ -739,14 +997,14 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                         <div className="bg-[#121214] p-2 border border-[#242426]">
                           <div className="flex justify-between text-[10px] mb-1">
                             <span className="text-slate-400">Line Coverage:</span>
-                            <span className={`font-bold ${(localAudit?.lineCoverage || 88) >= 70 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {localAudit?.lineCoverage || 88}% (Floor: 70%)
+                            <span className={`font-bold ${localAudit ? (localAudit.lineCoverage >= 70 ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-400'}`}>
+                              {localAudit ? `${localAudit.lineCoverage}%` : '--'} (Floor: 70%)
                             </span>
                           </div>
                           <div className="w-full bg-[#202024] h-1.5 overflow-hidden">
                             <div
-                              className={`h-full ${(localAudit?.lineCoverage || 88) >= 70 ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                              style={{ width: `${Math.min(100, localAudit?.lineCoverage || 88)}%` }}
+                              className={`h-full ${localAudit && localAudit.lineCoverage >= 70 ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                              style={{ width: `${Math.min(100, localAudit?.lineCoverage ?? 0)}%` }}
                             />
                           </div>
                         </div>
@@ -754,74 +1012,60 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                         <div className="bg-[#121214] p-2 border border-[#242426]">
                           <div className="flex justify-between text-[10px] mb-1">
                             <span className="text-slate-400">Branch Coverage:</span>
-                            <span className={`font-bold ${(localAudit?.branchCoverage || 76) >= 60 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {localAudit?.branchCoverage || 76}% (Floor: 60%)
+                            <span className={`font-bold ${localAudit ? (localAudit.branchCoverage >= 60 ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-400'}`}>
+                              {localAudit ? `${localAudit.branchCoverage}%` : '--'} (Floor: 60%)
                             </span>
                           </div>
                           <div className="w-full bg-[#202024] h-1.5 overflow-hidden">
                             <div
-                              className={`h-full ${(localAudit?.branchCoverage || 76) >= 60 ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                              style={{ width: `${Math.min(100, localAudit?.branchCoverage || 76)}%` }}
+                              className={`h-full ${localAudit && localAudit.branchCoverage >= 60 ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                              style={{ width: `${Math.min(100, localAudit?.branchCoverage ?? 0)}%` }}
                             />
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Critical Paths Status */}
+                    {/* Real Untested Critical Paths & Theater Findings */}
                     <div className="bg-[#09090b] border border-[#222222] p-3 space-y-2">
                       <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center justify-between">
                         <span className="flex items-center space-x-1.5">
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>PRD & Architecture Critical Paths:</span>
+                          <span>Critical Paths &amp; Test Theater Findings</span>
                         </span>
-                        <span className="text-[9px] text-slate-500">Zero-Gap Enforcement</span>
-                      </div>
-                      <div className="space-y-1 text-[10px]">
-                        {[
-                          { name: 'Authentication & Session Flow (Bearer / 401 Guard)', covered: true },
-                          { name: 'Data Mutation Endpoints (POST / PUT / DELETE payload integrity)', covered: true },
-                          { name: 'Core Business / Transaction State Engine', covered: true },
-                          { name: 'Health Check /api/health Latency Probe', covered: true }
-                        ].map((cp, i) => (
-                          <div key={i} className="flex items-center justify-between py-1 border-b border-[#18181a]">
-                            <span className="text-slate-300">{cp.name}</span>
-                            <span className="text-emerald-400 text-[9px] flex items-center space-x-1">
-                              <Check className="w-3 h-3" />
-                              <span>Covered</span>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Test Theater Screening */}
-                    <div className="bg-[#09090b] border border-[#222222] p-3 space-y-2">
-                      <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                        <span className="flex items-center space-x-1.5">
-                          <ShieldCheck className="w-3.5 h-3.5 text-violet-400" />
-                          <span>Test Theater Pattern Screen:</span>
+                        <span className="text-[9px] text-slate-500">
+                          {localAudit ? `${localAudit.testTheaterFindings.length} theater flags` : 'Not audited'}
                         </span>
-                        <span className="text-[9px] text-emerald-400 font-bold">0 DEFICIENCIES</span>
                       </div>
-                      <div className="grid grid-cols-2 gap-1.5 text-[9px] text-slate-400">
-                        <div className="flex items-center space-x-1">
-                          <Check className="w-2.5 h-2.5 text-emerald-400" />
-                          <span>No throw-only assertions</span>
+                      {!localAudit ? (
+                        <div className="text-[10px] text-slate-500 py-2">
+                          Click &quot;Run Coverage Analysis&quot; or complete the orchestrator Final Gate to compute real metrics.
                         </div>
-                        <div className="flex items-center space-x-1">
-                          <Check className="w-2.5 h-2.5 text-emerald-400" />
-                          <span>No snapshot-only tests</span>
+                      ) : (
+                        <div className="space-y-1 text-[10px]">
+                          {localAudit.untestedCriticalPaths.length === 0 && localAudit.testTheaterFindings.length === 0 ? (
+                            <div className="text-emerald-400 flex items-center gap-1.5 py-1">
+                              <Check className="w-3.5 h-3.5" />
+                              <span>All critical paths verified; 0 test theater patterns detected.</span>
+                            </div>
+                          ) : (
+                            <>
+                              {localAudit.untestedCriticalPaths.map((cp, i) => (
+                                <div key={`cp_${i}`} className="text-amber-300 flex items-center gap-1.5 py-0.5">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  <span>Untested: {cp}</span>
+                                </div>
+                              ))}
+                              {localAudit.testTheaterFindings.map((tf, i) => (
+                                <div key={`tf_${i}`} className="text-rose-400 flex items-center gap-1.5 py-0.5">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  <span>{tf}</span>
+                                </div>
+                              ))}
+                            </>
+                          )}
                         </div>
-                        <div className="flex items-center space-x-1">
-                          <Check className="w-2.5 h-2.5 text-emerald-400" />
-                          <span>Exercises real code (no mocks)</span>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <Check className="w-2.5 h-2.5 text-emerald-400" />
-                          <span>Zero skipped/commented tests</span>
-                        </div>
-                      </div>
+                      )}
                     </div>
 
                     {/* Deployment Certificate & Re-audit Trigger */}
@@ -832,7 +1076,9 @@ export default function AgentOrchestrationGraph({ agents, projectId, project, on
                           <span>Executive Deployment Certificate</span>
                         </div>
                         <div className="text-slate-300 font-mono text-[9px] mt-0.5">
-                          {project?.deploymentCertificate?.certificateHash || 'cert_sha256_e8a49c71f02b'} • Signed by Aria CEO (gemini-2.5-pro)
+                          {project?.deploymentCertificate?.certificateHash
+                            ? `${project.deploymentCertificate.certificateHash} • ${project.deploymentCertificate.certifiedBy}`
+                            : 'Certificate pending Final Gate pass'}
                         </div>
                       </div>
                       <button

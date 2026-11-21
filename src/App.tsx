@@ -23,6 +23,7 @@ import FeaturesPage from './pages/FeaturesPage';
 import TemplatesPage from './pages/TemplatesPage';
 import DocsPage from './pages/DocsPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { AGENT_ROSTER } from './config/agentRoster';
 import {
   fetchFirestoreProjects,
   saveFirestoreProject,
@@ -206,13 +207,10 @@ function AppContent() {
               provider: 'openrouter',
               status: 'idle',
               avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=80&fit=crop&q=60',
-              model: 'anthropic/claude-3.5-sonnet',
+              model: AGENT_ROSTER.parker.defaultModel,
               currentTask: 'Standing by for CEO directive on PRD scoping',
               validationStatus: 'pending',
-              subagents: [
-                { id: `sub_pm_1_${projectId}`, name: 'Spec Writer', role: 'PRD Modeler', task: 'Synthesizing feature matrix & core entities', status: 'idle', instructionsReceived: [], model: 'claude-3.5-sonnet' },
-                { id: `sub_pm_2_${projectId}`, name: 'User Flow Synthesizer', role: 'UX Analyst', task: 'Modeling edge-case user actions & workflows', status: 'idle', instructionsReceived: [], model: 'claude-3.5-sonnet' }
-              ],
+              subagents: [],
               outputLogs: []
             },
             {
@@ -223,13 +221,10 @@ function AppContent() {
               provider: 'openrouter',
               status: 'idle',
               avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=80&fit=crop&q=60',
-              model: 'openai/o3-mini',
+              model: AGENT_ROSTER.sophia.defaultModel,
               currentTask: 'Standing by for PRD validation from CEO',
               validationStatus: 'pending',
-              subagents: [
-                { id: `sub_arch_1_${projectId}`, name: 'Data Schema Modeler', role: 'DB Architect', task: 'Drafting strict TypeScript interfaces & database schemas', status: 'idle', instructionsReceived: [], model: 'o3-mini' },
-                { id: `sub_arch_2_${projectId}`, name: 'API Contract Validator', role: 'API Architect', task: 'Verifying REST routes & security middleware', status: 'idle', instructionsReceived: [], model: 'o3-mini' }
-              ],
+              subagents: [],
               outputLogs: []
             },
             {
@@ -240,13 +235,10 @@ function AppContent() {
               provider: 'nvidia',
               status: 'idle',
               avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=80&fit=crop&q=60',
-              model: 'meta/llama-3.3-70b-instruct',
+              model: AGENT_ROSTER.frank.defaultModel,
               currentTask: 'Standing by for Architecture approval',
               validationStatus: 'pending',
-              subagents: [
-                { id: `sub_fe_1_${projectId}`, name: 'Component Tree Builder', role: 'React Developer', task: 'Synthesizing responsive Tailwind components', status: 'idle', instructionsReceived: [], model: 'llama-3.3-70b' },
-                { id: `sub_fe_2_${projectId}`, name: 'Interactive State Polisher', role: 'UI Engineer', task: 'Binding interactive state hooks & animations', status: 'idle', instructionsReceived: [], model: 'llama-3.3-70b' }
-              ],
+              subagents: [],
               outputLogs: []
             },
             {
@@ -257,13 +249,10 @@ function AppContent() {
               provider: 'groq',
               status: 'idle',
               avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&fit=crop&q=60',
-              model: 'deepseek-r1-distill-llama-70b',
+              model: AGENT_ROSTER.quinn.defaultModel,
               currentTask: 'Standing by for code synthesis',
               validationStatus: 'pending',
-              subagents: [
-                { id: `sub_qa_1_${projectId}`, name: 'Unit Test Runner', role: 'Test Engineer', task: 'Running unit test assertions & regression probes', status: 'idle', instructionsReceived: [], model: 'deepseek-r1' },
-                { id: `sub_qa_2_${projectId}`, name: 'Integration & Edge Verifier', role: 'Security Auditor', task: 'Auditing OWASP Top 10 rules & input boundaries', status: 'idle', instructionsReceived: [], model: 'deepseek-r1' }
-              ],
+              subagents: [],
               outputLogs: []
             },
             {
@@ -274,13 +263,10 @@ function AppContent() {
               provider: 'groq',
               status: 'idle',
               avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=80&fit=crop&q=60',
-              model: 'llama-3.3-70b-versatile',
+              model: AGENT_ROSTER.devon.defaultModel,
               currentTask: 'Standing by for QA pass',
               validationStatus: 'pending',
-              subagents: [
-                { id: `sub_sre_1_${projectId}`, name: 'Docker Container Builder', role: 'DevOps Engineer', task: 'Building multi-stage container & mapping port 3000', status: 'idle', instructionsReceived: [], model: 'llama-3.3-70b' },
-                { id: `sub_sre_2_${projectId}`, name: 'Ingress & Self-Healing Daemon', role: 'SRE Specialist', task: 'Configuring health probes & auto-recovery hooks', status: 'idle', instructionsReceived: [], model: 'llama-3.3-70b' }
-              ],
+              subagents: [],
               outputLogs: []
             }
           ]
@@ -303,7 +289,7 @@ function AppContent() {
       navigate(`/projects/${newProject.id}`);
     } catch (err) {
       console.error('Error forging project:', err);
-      alert(err instanceof Error ? err.message : 'Project generation failed. Please try again.');
+      setCreditNotice(err instanceof Error ? err.message : 'Project generation failed. Please try again.');
     }
   };
 

@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Project, Agent, AgentLog } from '../types';
+import React, { useEffect, useRef } from 'react';
+import { Project, Agent, AgentLog, ExecutionRun } from '../types';
 import {
-  Sparkles,
   Cpu,
   Terminal,
   FileCode,
@@ -9,11 +8,10 @@ import {
   Clock,
   Loader2,
   Bot,
-  Layers,
   ArrowRight,
-  ShieldCheck,
-  Server,
-  Zap
+  Zap,
+  Wrench,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface LiveSwarmGenerationTrackerProps {
@@ -21,6 +19,7 @@ interface LiveSwarmGenerationTrackerProps {
   progressPercentage?: number;
   activeAgent?: Agent;
   logs?: AgentLog[];
+  executionRun?: ExecutionRun | null;
   onViewCode?: () => void;
   onViewSwarm?: () => void;
 }
@@ -30,25 +29,30 @@ export default function LiveSwarmGenerationTracker({
   progressPercentage,
   activeAgent,
   logs = [],
+  executionRun,
   onViewCode,
-  onViewSwarm
+  onViewSwarm,
 }: LiveSwarmGenerationTrackerProps) {
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
-  // Derive active agent from project if not passed directly
+  const run = executionRun || project.lastExecutionRun || null;
+
   const currentAgent =
     activeAgent ||
     project.agents?.find((a) => a.status === 'active' || a.status === 'thinking') ||
     project.agents?.[0];
 
-  const completedCount = project.agents?.filter((a) => a.status === 'complete').length || 0;
-  const totalAgents = project.agents?.length || 6;
+  const completedCount = run?.metrics?.completedTasks ?? (project.agents?.filter((a) => a.status === 'complete').length || 0);
+  const totalCount = run?.metrics?.totalTasks ?? (project.agents?.length || 6);
   const calculatedPercent =
     progressPercentage !== undefined
       ? progressPercentage
-      : Math.min(100, Math.round((completedCount / totalAgents) * 100));
+      : totalCount > 0
+      ? Math.min(100, Math.round((completedCount / totalCount) * 100))
+      : 0;
 
   const allLogs = logs.length > 0 ? logs : (project.agents?.flatMap((a) => a.outputLogs) || []);
+  const recentTools = (run?.toolExecutions || []).slice(-6).reverse();
 
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -72,11 +76,19 @@ export default function LiveSwarmGenerationTracker({
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-mono font-bold uppercase tracking-widest text-emerald-400">
-                  Autonomous Swarm Active
+                  {run?.status === 'awaiting_approval'
+                    ? 'Awaiting Human Approval'
+                    : run?.status === 'cancelled'
+                    ? 'Execution Cancelled'
+                    : run?.status === 'failed'
+                    ? 'Execution Halted'
+                    : 'Orchestrator DAG Executing'}
                 </span>
-                <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-slate-400 font-mono">
-                  Port 3000 Ingress
-                </span>
+                {run && (
+                  <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-slate-400 font-mono">
+                    Run {run.runId}
+                  </span>
+                )}
               </div>
               <h2 className="text-lg md:text-xl font-black text-white tracking-tight">
                 Synthesizing {project.name || 'Application Workspace'}
@@ -86,7 +98,7 @@ export default function LiveSwarmGenerationTracker({
 
           <div className="flex items-center gap-3">
             <div className="text-right">
-              <div className="text-xs font-mono text-slate-400">Swarm Progress</div>
+              <div className="text-xs font-mono text-slate-400">DAG Progress</div>
               <div className="text-lg font-black font-mono text-emerald-400">
                 {calculatedPercent}%
               </div>
@@ -103,17 +115,18 @@ export default function LiveSwarmGenerationTracker({
             />
           </div>
           <div className="flex justify-between text-[11px] text-slate-400 font-mono">
-            <span>Stage: {currentAgent?.name || 'Aria CEO'} ({currentAgent?.role || 'Executive Directives'})</span>
+            <span>
+              Stage: {currentAgent?.name || 'Aria CEO'} ({completedCount}/{totalCount} DAG Tasks · {run?.metrics?.totalToolCalls || 0} Tool Calls)
+            </span>
             <span>{project.files?.length || 0} Files Written</span>
           </div>
         </div>
       </div>
 
-      {/* Main Grid: Active Agent + Pipeline + Logs */}
+      {/* Main Grid: Active Agent + Pipeline + Logs & Live Tools */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 my-6">
         {/* Left Column: Active Agent Card & Pipeline Stages */}
         <div className="lg:col-span-5 space-y-4">
-          {/* Active Agent Spotlight */}
           <div className="bg-[#121218] border border-violet-500/30 rounded-2xl p-4 md:p-5 relative overflow-hidden shadow-xl">
             <div className="absolute top-0 right-0 w-32 h-32 bg-violet-600/10 rounded-full blur-2xl pointer-events-none" />
             <div className="flex items-center justify-between text-xs font-mono text-violet-400 mb-3">
@@ -134,14 +147,14 @@ export default function LiveSwarmGenerationTracker({
               <div>
                 <h3 className="text-base font-bold text-white">{currentAgent?.name || 'Swarm Lead'}</h3>
                 <p className="text-xs text-slate-400">{currentAgent?.role || 'Autonomous Engineer'}</p>
-                <span className="text-[10px] font-mono text-slate-500">{currentAgent?.model || 'Gemini 2.5 Flash'}</span>
+                <span className="text-[10px] font-mono text-slate-500">{currentAgent?.modelUsed || currentAgent?.model || 'gemini-2.5-flash'}</span>
               </div>
             </div>
 
             <div className="bg-[#0a0a0f] border border-white/5 rounded-xl p-3 flex items-start gap-2.5">
               <Loader2 size={15} className="animate-spin text-emerald-400 shrink-0 mt-0.5" />
               <div className="text-xs text-slate-300 font-mono leading-relaxed">
-                {currentAgent?.currentTask || 'Deconstructing requirements into architectural contracts...'}
+                {currentAgent?.currentTask || 'Executing orchestrator DAG node...'}
               </div>
             </div>
           </div>
@@ -154,12 +167,15 @@ export default function LiveSwarmGenerationTracker({
             <div className="space-y-1.5">
               {project.agents?.map((agent, idx) => {
                 const isComplete = agent.status === 'complete';
-                const isActive = agent.status === 'active' || agent.status === 'thinking';
+                const isActive = agent.status === 'active' || agent.status === 'thinking' || agent.status === 'healing';
+                const isFailed = agent.status === 'failed';
                 return (
                   <div
                     key={agent.id || idx}
                     className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs transition border ${
-                      isActive
+                      isFailed
+                        ? 'bg-rose-950/20 border-rose-500/40 text-rose-300'
+                        : isActive
                         ? 'bg-violet-950/30 border-violet-500/40 text-white'
                         : isComplete
                         ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
@@ -169,16 +185,18 @@ export default function LiveSwarmGenerationTracker({
                     <div className="flex items-center gap-2.5">
                       {isComplete ? (
                         <CheckCircle2 size={14} className="text-emerald-400" />
+                      ) : isFailed ? (
+                        <AlertTriangle size={14} className="text-rose-400" />
                       ) : isActive ? (
                         <Loader2 size={14} className="animate-spin text-violet-400" />
                       ) : (
                         <Clock size={14} className="text-slate-500" />
                       )}
                       <span className="font-semibold">{agent.name}</span>
-                      <span className="text-[10px] text-slate-500">({agent.role.split(' ')[0]})</span>
+                      <span className="text-[10px] text-slate-500">({agent.subagents?.length || 0} sub)</span>
                     </div>
                     <span className="text-[10px] font-mono uppercase tracking-wider">
-                      {isComplete ? 'Complete' : isActive ? 'Working' : 'Queued'}
+                      {agent.status}
                     </span>
                   </div>
                 );
@@ -187,31 +205,31 @@ export default function LiveSwarmGenerationTracker({
           </div>
         </div>
 
-        {/* Right Column: Live Terminal Stream & Files */}
+        {/* Right Column: Live Terminal Stream, Recent Tools & Files */}
         <div className="lg:col-span-7 flex flex-col space-y-4">
           {/* Live Terminal Stream */}
-          <div className="bg-[#0a0a0f] border border-white/10 rounded-2xl p-4 flex-1 flex flex-col min-h-[320px] shadow-2xl">
+          <div className="bg-[#0a0a0f] border border-white/10 rounded-2xl p-4 flex-1 flex flex-col min-h-[260px] shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-3 text-xs font-mono text-slate-400">
               <div className="flex items-center gap-2">
                 <Terminal size={14} className="text-emerald-400" />
-                <span>Live Swarm Telemetry & Code Generation Stream</span>
+                <span>Live Swarm Telemetry &amp; Execution Stream</span>
               </div>
               <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded font-mono">
-                LIVE
+                LIVE SSE
               </span>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1 font-mono text-[11px] max-h-[320px]">
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 font-mono text-[11px] max-h-[250px]">
               {allLogs.length === 0 ? (
                 <div className="text-slate-500 italic py-8 text-center">
-                  Swarm agents initializing work orders...
+                  Swarm agents initializing DAG work orders...
                 </div>
               ) : (
                 allLogs.map((log, i) => (
                   <div key={i} className="flex items-start gap-2.5 leading-relaxed">
                     <span className="text-slate-500 text-[10px] shrink-0 mt-0.5">{log.timestamp}</span>
                     <span className="text-violet-400 font-bold shrink-0">
-                      [{(log as any).agent || (log as any).agentId || 'Swarm Engine'}]
+                      [{(log as any).agent || (log as any).agentId || 'Orchestrator'}]
                     </span>
                     <span
                       className={
@@ -232,6 +250,42 @@ export default function LiveSwarmGenerationTracker({
               <div ref={terminalEndRef} />
             </div>
           </div>
+
+          {/* Recent Tool Invocations */}
+          {recentTools.length > 0 && (
+            <div className="bg-[#121218] border border-white/10 rounded-2xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="text-slate-300 font-bold flex items-center gap-1.5">
+                  <Wrench size={13} className="text-cyan-400" />
+                  Recent Tool Invocations ({run?.toolExecutions.length || 0})
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  {run?.metrics.succeededToolCalls || 0} ok / {run?.metrics.failedToolCalls || 0} err
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {recentTools.map((tool) => (
+                  <div
+                    key={tool.executionId}
+                    className="bg-[#0a0a0f] border border-white/5 px-2.5 py-1.5 rounded-lg flex items-center justify-between text-[10px] font-mono"
+                  >
+                    <span className="text-violet-300 truncate max-w-[140px]">{tool.toolName}</span>
+                    <span
+                      className={
+                        tool.status === 'success'
+                          ? 'text-emerald-400'
+                          : tool.status === 'failed'
+                          ? 'text-rose-400'
+                          : 'text-amber-300'
+                      }
+                    >
+                      {tool.status} {tool.durationMs !== undefined ? `(${tool.durationMs}ms)` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Live Generated Files Badge Bar */}
           {project.files && project.files.length > 0 && (
@@ -275,7 +329,7 @@ export default function LiveSwarmGenerationTracker({
       <div className="border-t border-white/10 pt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400 font-mono">
         <div className="flex items-center gap-2">
           <Zap size={14} className="text-amber-400" />
-          <span>Interactive Preview will mount automatically once deployment verification passes.</span>
+          <span>Interactive Preview mounts only after deployment verification passes.</span>
         </div>
         <div className="flex items-center gap-2">
           {onViewSwarm && (

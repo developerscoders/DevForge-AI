@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Download, Monitor, RefreshCw, Smartphone, Tablet } from 'lucide-react';
-import { Project, Agent, AgentLog } from '../types';
+import { Project, Agent, AgentLog, ExecutionRun } from '../types';
 import LiveInteractiveApp from './LiveInteractiveApp';
 import LiveSwarmGenerationTracker from './LiveSwarmGenerationTracker';
 
@@ -12,6 +12,7 @@ interface LiveSandboxPreviewProps {
   progressPercentage?: number;
   activeAgent?: Agent;
   logs?: AgentLog[];
+  executionRun?: ExecutionRun | null;
 }
 
 /** Workspace preview displays real-time swarm generation tracking or the deployed interactive application. */
@@ -22,7 +23,8 @@ export default function LiveSandboxPreview({
   onViewSwarm,
   progressPercentage,
   activeAgent,
-  logs
+  logs,
+  executionRun,
 }: LiveSandboxPreviewProps) {
   const [viewport, setViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [reloading, setReloading] = useState(false);
@@ -40,7 +42,7 @@ export default function LiveSandboxPreview({
     project.status === 'planning' ||
     project.status === 'coding' ||
     project.status === 'review' ||
-    (progressPercentage !== undefined && progressPercentage < 100) ||
+    (progressPercentage !== undefined && progressPercentage < 100 && project.status !== 'deployed') ||
     !project.files ||
     project.files.length === 0 ||
     (!allAgentsDone && project.status !== 'deployed');
@@ -83,6 +85,7 @@ export default function LiveSandboxPreview({
               progressPercentage={progressPercentage}
               activeAgent={activeAgent}
               logs={logs}
+              executionRun={executionRun}
               onViewCode={onViewCode}
               onViewSwarm={onViewSwarm}
             />

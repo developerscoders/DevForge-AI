@@ -283,118 +283,166 @@ export const FIXED_SWARM_ROSTER: Record<string, SwarmLeadRosterItem> = {
 
 /**
  * Step 2b: Independent Test Quality Audit
- * Run real code coverage instrumentation (line, branch, function coverage) against tests/app.test.ts
- * and return exact percentages plus a list of untested files/functions.
- * Screen for test theater patterns and critical paths.
+ * Inspects source symbols/branches vs test suite assertions, checks PRD/architecture critical paths,
+ * and screens for test theater patterns.
  */
-export function runCoverageAnalysis(project: Project, targetFiles?: string[]): TestQualityAudit {
-  const testFile = project.files.find(f => f.path.includes('test') || f.name.includes('test'));
-  const testContent = testFile?.content || '';
+export function runCoverageAnalysis(
+  project: Project,
+  targetFiles?: string[],
+  realTestSummary?: { executedRealTests: boolean; testsPassed: number; testsFailed: number }
+): TestQualityAudit {
+  const testFiles = (project.files || []).filter(
+    (f) => f.path.includes('.test.') || f.path.includes('.spec.') || f.path.startsWith('tests/')
+  );
+  const testContent = testFiles.map((f) => f.content || '').join('\n\n');
 
-  const nonUiFiles = project.files.filter(f => 
-    !f.path.startsWith('src/components') && 
-    (f.path.endsWith('.ts') || f.path.endsWith('.tsx') || f.path.endsWith('.js'))
+  const nonUiFiles = (project.files || []).filter(
+    (f) =>
+      !f.path.startsWith('src/components') &&
+      !f.path.includes('.test.') &&
+      !f.path.includes('.spec.') &&
+      (f.path.endsWith('.ts') || f.path.endsWith('.tsx') || f.path.endsWith('.js'))
   );
 
-  // Extract critical paths from PRD and architecture
-  const prdFile = project.files.find(f => f.name === 'PRD.md')?.content || '';
-  const archFile = project.files.find(f => f.name === 'architecture.md')?.content || '';
-  
+  // Extract critical paths from PRD and architecture (supporting both docs/ and root paths)
+  const prdFile =
+    project.files.find((f) => f.path === 'docs/PRD.md' || f.name === 'PRD.md')?.content || '';
+  const archFile =
+    project.files.find((f) => f.path === 'docs/ARCHITECTURE.md' || f.name === 'ARCHITECTURE.md' || f.name === 'architecture.md')
+      ?.content || '';
+
   const criticalPathsToCheck: { name: string; regex: RegExp }[] = [
     { name: 'Authentication & Session Security Flow', regex: /auth|login|signup|session|jwt|token|bearer/i },
     { name: 'Data Mutation Endpoints (POST / PUT / DELETE)', regex: /post|put|delete|mutation|create|update|insert/i },
-    { name: 'Core Business / Transaction Engine', regex: /order|billing|payment|checkout|swap|trade|transfer|balance/i }
+    { name: 'Core Business / Transaction Engine', regex: /order|billing|payment|checkout|swap|trade|transfer|balance|entity|task|project/i },
   ];
 
   // Screen for Test Theater patterns
   const testTheaterFindings: string[] = [];
 
-  // 1. Assertions that only check a function didn't throw
-  if (/expect\([^)]+\)\.not\.toThrow/i.test(testContent) && !/expect\([^)]+\)\.(toBe|toEqual|toHaveProperty|toMatch|toContain)/i.test(testContent)) {
-    testTheaterFindings.push('Assertions only check that no exception was thrown without checking actual return value or state mutation.');
+  if (
+    /expect\([^)]+\)\.not\.toThrow/i.test(testContent) &&
+    !/expect\([^)]+\)\.(toBe|toEqual|toHaveProperty|toMatch|toContain|toBeGreaterThan|toBeLessThan|toHaveLength|toBeDefined)/i.test(testContent)
+  ) {
+    testTheaterFindings.push(
+      'Assertions only check that no exception was thrown without checking actual return value or state mutation.'
+    );
   }
 
-  // 2. Snapshot-only tests with no interaction/assertion
-  if (/toMatchSnapshot/i.test(testContent) && !/toBe|toEqual|toHaveBeenCalled|toContain/i.test(testContent)) {
-    testTheaterFindings.push('Snapshot-only test detected with no behavior or state verification assertions.');
+  if (
+    /toMatchSnapshot/i.test(testContent) &&
+    !/toBe|toEqual|toHaveBeenCalled|toContain/i.test(testContent)
+  ) {
+    testTheaterFindings.push(
+      'Snapshot-only test detected with no behavior or state verification assertions.'
+    );
   }
 
-  // 3. Tests exercising a mock of the function under test rather than the real implementation
-  if (/vi\.mock|jest\.mock/i.test(testContent) && testContent.includes('mockImplementation') && !testContent.includes('import {') ) {
-    testTheaterFindings.push('Tests exercise simulated mock object instead of actual business logic functions.');
+  if (
+    /vi\.mock|jest\.mock/i.test(testContent) &&
+    testContent.includes('mockImplementation') &&
+    !testContent.includes('import {')
+  ) {
+    testTheaterFindings.push(
+      'Tests exercise simulated mock object instead of actual business logic functions.'
+    );
   }
 
-  // 4. Skipped or commented-out test cases
-  if (/\.skip\(|xit\(|\/\/ *TODO *test/i.test(testContent)) {
-    testTheaterFindings.push('Skipped or commented-out test cases (.skip, xit, // TODO test) counted toward pass rate.');
+  if (/\.skip\(|xit\(|describe\.skip\(|\/\/\s*TODO\s*test/i.test(testContent)) {
+    testTheaterFindings.push(
+      'Skipped or commented-out test cases (.skip, xit, // TODO test) counted toward pass rate.'
+    );
   }
 
-  // 5. One test asserting multiple unrelated behaviors
-  const testBlocks = testContent.split(/it\(|test\(/g).slice(1);
+  const testBlocks = testContent.split(/\b(?:it|test)\s*\(/g).slice(1);
   for (const block of testBlocks) {
-    const expects = (block.match(/expect\(/g) || []).length;
+    const expects = (block.match(/\bexpect\s*\(/g) || []).length;
     if (expects > 8 && /auth/i.test(block) && /payment|render|ui/i.test(block)) {
-      testTheaterFindings.push('One test asserting multiple unrelated behaviors, masking future regressions.');
+      testTheaterFindings.push(
+        'One test asserting multiple unrelated behaviors, masking future regressions.'
+      );
       break;
     }
   }
 
-  // 6. Tests that don't correspond to any acceptance criterion in Parker's PRD
   if (prdFile.length > 50 && testBlocks.length === 0) {
     testTheaterFindings.push('Tests do not correspond to acceptance criteria documented in PRD.');
   }
 
   // Identify critical paths from Sophia's architecture & Parker's PRD
   const untestedCriticalPaths: string[] = [];
-  criticalPathsToCheck.forEach(cp => {
+  criticalPathsToCheck.forEach((cp) => {
     const isPresentInPrdOrArch = cp.regex.test(prdFile) || cp.regex.test(archFile);
-    if (isPresentInPrdOrArch) {
-      const isCoveredInTest = cp.regex.test(testContent);
-      if (!isCoveredInTest) {
-        untestedCriticalPaths.push(cp.name);
-      }
+    if (isPresentInPrdOrArch && !cp.regex.test(testContent)) {
+      untestedCriticalPaths.push(cp.name);
     }
   });
 
-  // Calculate actual instrumentation percentages
-  const testLines = testContent.split('\n').length;
-  const testAssertionsCount = (testContent.match(/expect\(/g) || []).length;
+  // Compute deterministic coverage from actual exported symbols, endpoints, and conditional branches
+  const filesToEvaluate =
+    targetFiles && targetFiles.length > 0
+      ? nonUiFiles.filter((f) => targetFiles.includes(f.path))
+      : nonUiFiles;
+
+  const exportedSymbols: string[] = [];
+  let totalBranches = 0;
+  for (const f of filesToEvaluate) {
+    const src = f.content || '';
+    const fnMatches = src.matchAll(/\bexport\s+(?:async\s+)?(?:function|const)\s+([a-zA-Z0-9_]+)/g);
+    for (const m of fnMatches) exportedSymbols.push(m[1]);
+    const branchMatches = src.match(/\b(?:if|else\s+if|switch|case|\?\s*[^:]+\s*:|&&|\|\|)\b/g);
+    totalBranches += branchMatches ? branchMatches.length : 1;
+  }
+
+  const testedSymbols = exportedSymbols.filter((sym) =>
+    new RegExp(`\\b${sym}\\b`).test(testContent)
+  );
+  const testAssertionsCount = (testContent.match(/\bexpect\s*\(/g) || []).length;
   const testCasesCount = testBlocks.length;
 
   let lineCoverage = 0;
   let branchCoverage = 0;
   let functionCoverage = 0;
 
-  if (testContent.trim().length > 30 && testAssertionsCount > 0) {
-    // Base coverage based on test richness
-    if (testCasesCount >= 4 && testAssertionsCount >= 6) {
-      lineCoverage = Math.min(94, 82 + Math.min(12, testAssertionsCount));
-      branchCoverage = Math.min(88, 72 + Math.min(16, testAssertionsCount));
-      functionCoverage = Math.min(92, 80 + Math.min(12, testAssertionsCount));
-    } else if (testCasesCount >= 2) {
-      lineCoverage = 74;
-      branchCoverage = 64;
-      functionCoverage = 70;
-    } else {
-      lineCoverage = 52;
-      branchCoverage = 44;
-      functionCoverage = 48;
-    }
+  if (testContent.trim().length > 30 && testAssertionsCount > 0 && testCasesCount > 0) {
+    const symbolRatio =
+      exportedSymbols.length > 0
+        ? testedSymbols.length / exportedSymbols.length
+        : Math.min(1, testCasesCount / 5);
+    const assertionDensity = Math.min(1, testAssertionsCount / Math.max(6, filesToEvaluate.length * 2));
+    const branchRatio = Math.min(1, testAssertionsCount / Math.max(4, totalBranches * 0.65));
+
+    functionCoverage = Math.round(
+      Math.min(100, Math.max(testCasesCount >= 3 ? 55 : 25, symbolRatio * 60 + assertionDensity * 35))
+    );
+    lineCoverage = Math.round(
+      Math.min(98, Math.max(testCasesCount >= 4 ? 60 : 30, assertionDensity * 55 + symbolRatio * 40))
+    );
+    branchCoverage = Math.round(
+      Math.min(95, Math.max(testCasesCount >= 4 ? 50 : 20, branchRatio * 55 + assertionDensity * 35))
+    );
   }
 
-  // Untested files
-  const filesToEvaluate = targetFiles && targetFiles.length > 0 
-    ? nonUiFiles.filter(f => targetFiles.includes(f.path))
-    : nonUiFiles;
-
   const untestedFiles = filesToEvaluate
-    .filter(f => !testContent.toLowerCase().includes(f.name.toLowerCase().replace(/\.(ts|tsx)$/, '')))
-    .map(f => f.path);
+    .filter((f) => {
+      const base = f.name.toLowerCase().replace(/\.(ts|tsx|js|jsx)$/, '');
+      const hasFileRef = testContent.toLowerCase().includes(base);
+      const src = f.content || '';
+      const syms = Array.from(src.matchAll(/\bexport\s+(?:async\s+)?(?:function|const)\s+([a-zA-Z0-9_]+)/g)).map(
+        (m) => m[1]
+      );
+      const hasSymRef = syms.some((s) => testContent.includes(s));
+      return !hasFileRef && !hasSymRef;
+    })
+    .map((f) => f.path);
 
-  // Verdict calculation
-  let verdict: 'pass' | 'failed_coverage_floor' | 'failed_critical_path' | 'failed_test_quality' = 'pass';
+  let verdict: 'pass' | 'failed_coverage_floor' | 'failed_critical_path' | 'failed_test_quality' =
+    'pass';
 
-  if (lineCoverage < 70 || branchCoverage < 60) {
+  if (realTestSummary?.executedRealTests && realTestSummary.testsFailed > 0) {
+    verdict = 'failed_test_quality';
+    testTheaterFindings.push(`${realTestSummary.testsFailed} real test case(s) failed during execution.`);
+  } else if (lineCoverage < 70 || branchCoverage < 60) {
     verdict = 'failed_coverage_floor';
   } else if (untestedCriticalPaths.length > 0) {
     verdict = 'failed_critical_path';
@@ -411,64 +459,100 @@ export function runCoverageAnalysis(project: Project, targetFiles?: string[]): T
     testTheaterFindings,
     rawTestContent: testContent,
     verdict,
-    auditedAt: new Date().toISOString()
+    executedRealTests: realTestSummary?.executedRealTests ?? false,
+    testsPassed: realTestSummary?.testsPassed,
+    testsFailed: realTestSummary?.testsFailed,
+    auditedAt: new Date().toISOString(),
   };
 }
 
 /**
- * Step 1 of Final Gate: Run real AST parse and integration static analysis across all files.
+ * Step 1 of Final Gate: Perform static syntax, contract cross-reference, and OWASP security audit.
  */
-export function runAstAudit(project: Project): AstAuditResult {
-  const errors: string[] = [];
+export function runAstAudit(project: Project, compilerDiagnostics: string[] = []): AstAuditResult {
+  const errors: string[] = [...compilerDiagnostics];
   const brokenReferences: string[] = [];
   let securityAlerts = 0;
   let port3000Configured = false;
+  let filesParsed = 0;
 
-  // Static sites do not expose an application port. Require an ingress
-  // declaration only when the generated artifact actually contains a server.
-  const dockerfile = project.files.find(f => f.path === 'Dockerfile' || f.name === 'Dockerfile');
-  const dockerCompose = project.files.find(f => f.path.includes('docker-compose') || f.name.includes('docker-compose'));
-  const requiresServer = project.files.some(f => /(^|\/)(server|api)\//.test(f.path) || /express\(|createServer\(/.test(f.content));
-  
+  const dockerfile = project.files.find((f) => f.path === 'Dockerfile' || f.name === 'Dockerfile');
+  const dockerCompose = project.files.find(
+    (f) => f.path.includes('docker-compose') || f.name.includes('docker-compose')
+  );
+  const requiresServer = project.files.some(
+    (f) =>
+      /(^|\/)(server|api)\//.test(f.path) || /express\(|createServer\(/.test(f.content || '')
+  );
+
   if (
-    (dockerfile && dockerfile.content.includes('3000')) ||
-    (dockerCompose && dockerCompose.content.includes('3000'))
+    (dockerfile && (dockerfile.content || '').includes('3000')) ||
+    (dockerCompose && (dockerCompose.content || '').includes('3000'))
   ) {
     port3000Configured = true;
   } else if (requiresServer) {
     errors.push('Port 3000 ingress missing from Dockerfile or docker-compose.yml configuration.');
   }
 
-  // Cross-reference Frank's UI endpoints vs Sophia's Architecture definitions
-  const feApiFile = project.files.find(f => f.path.includes('api.ts'));
-  const schemaFile = project.files.find(f => f.path.includes('schema.sql') || f.path.includes('server.ts') || f.path.includes('routes'));
-  
-  if (feApiFile && schemaFile) {
-    const feEndpoints = Array.from(feApiFile.content.matchAll(/['"`](\/api\/[a-zA-Z0-9_\-\/]+)['"`]/g)).map(m => m[1]);
-    feEndpoints.forEach(ep => {
+  const feApiFile = project.files.find((f) => f.path.includes('api.ts'));
+  const schemaFile = project.files.find(
+    (f) =>
+      f.path.includes('schema.sql') || f.path.includes('server.ts') || f.path.includes('routes')
+  );
+
+  if (feApiFile?.content && schemaFile?.content) {
+    const feEndpoints = Array.from(
+      feApiFile.content.matchAll(/['"`](\/api\/[a-zA-Z0-9_\-\/]+)['"`]/g)
+    ).map((m) => m[1]);
+    feEndpoints.forEach((ep) => {
       const endpointBase = ep.split('/')[2] || '';
-      if (ep !== '/api/health' && endpointBase && !schemaFile.content.includes(ep) && !schemaFile.content.includes(endpointBase)) {
-        brokenReferences.push(`Frank's UI references endpoint "${ep}" that Sophia did not define in schema or server contracts.`);
+      if (
+        ep !== '/api/health' &&
+        endpointBase &&
+        !schemaFile.content!.includes(ep) &&
+        !schemaFile.content!.includes(endpointBase)
+      ) {
+        brokenReferences.push(
+          `Frontend API client references endpoint "${ep}" that is missing in server/schema contracts.`
+        );
       }
     });
   }
 
-  // Check for forbidden "TODO" placeholders or fake packages
-  project.files.forEach(f => {
-    if (/\/\/\s*TODO|TODO:|<!--\s*TODO/i.test(f.content)) {
+  project.files.forEach((f) => {
+    const content = f.content || '';
+    if (/\.(ts|tsx|js|jsx|json)$/.test(f.path)) {
+      filesParsed++;
+    }
+    if (f.path.endsWith('.json')) {
+      try {
+        JSON.parse(content);
+      } catch (jsonErr: any) {
+        errors.push(`Invalid JSON in ${f.path}: ${jsonErr.message}`);
+      }
+    }
+    if (/\/\/\s*TODO\b|\/\*\s*TODO\b|<!--\s*TODO/i.test(content) || /\bTODO:/.test(content)) {
       errors.push(`File ${f.path} contains incomplete "TODO" placeholder text.`);
     }
-  });
-
-  // Zero-trust OWASP scan
-  project.files.forEach(f => {
-    if (/eval\(|dangerouslySetInnerHTML\s*=\s*\{\s*__html:\s*[^}]*\+/i.test(f.content)) {
+    if (
+      /\beval\s*\(|new\s+Function\s*\(|dangerouslySetInnerHTML\s*=\s*\{\{\s*__html\s*:/i.test(
+        content
+      )
+    ) {
       securityAlerts++;
-      errors.push(`OWASP Security Alert in ${f.path}: Potential unsafe injection detected.`);
+      errors.push(`OWASP Security Alert in ${f.path}: Potential unsafe code execution or XSS sink.`);
+    }
+    if (/(?:AIza[0-9A-Za-z\-_]{20,}|sk-[A-Za-z0-9\-_]{20,}|ghp_[A-Za-z0-9]{20,})/.test(content)) {
+      securityAlerts++;
+      errors.push(`OWASP Security Alert in ${f.path}: Hardcoded secret credential detected.`);
     }
   });
 
-  const passed = errors.length === 0 && brokenReferences.length === 0 && securityAlerts === 0 && (!requiresServer || port3000Configured);
+  const passed =
+    errors.length === 0 &&
+    brokenReferences.length === 0 &&
+    securityAlerts === 0 &&
+    (!requiresServer || port3000Configured);
 
   return {
     passed,
@@ -477,7 +561,8 @@ export function runAstAudit(project: Project): AstAuditResult {
     brokenReferences,
     securityAlerts,
     port3000Configured,
-    auditedAt: new Date().toISOString()
+    filesParsed,
+    auditedAt: new Date().toISOString(),
   };
 }
 

@@ -7,8 +7,9 @@ export interface AgentLog {
   stage?: string;
   type: 'info' | 'success' | 'warning' | 'error';
   level?: 'info' | 'warn' | 'error' | 'success';
+  executionId?: string;
+  toolName?: string;
 }
-
 
 export interface FileNode {
   path: string;
@@ -23,10 +24,18 @@ export interface SubAgent {
   name: string;
   role: string;
   task: string;
-  status: 'idle' | 'active' | 'failed' | 'healing' | 'complete';
+  status: 'idle' | 'active' | 'failed' | 'healing' | 'complete' | 'cancelled';
   instructionsReceived: string[];
   healingSummary?: string;
   model?: string;
+  parentAgentId?: string;
+  responsibility?: string;
+  allowedTools?: string[];
+  depth?: number;
+  createdAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  outputArtifact?: string;
 }
 
 export interface Agent {
@@ -35,7 +44,7 @@ export interface Agent {
   role: string;
   tier: 'ceo' | 'senior' | 'subagent';
   provider: 'gemini' | 'openrouter' | 'nvidia' | 'groq' | 'deepseek';
-  status: 'idle' | 'thinking' | 'active' | 'healing' | 'failed' | 'complete';
+  status: 'idle' | 'thinking' | 'active' | 'healing' | 'failed' | 'complete' | 'cancelled';
   avatar: string;
   currentTask?: string;
   outputLogs: { timestamp: string; message: string; type: 'info' | 'success' | 'warning' | 'error' }[];
@@ -48,8 +57,11 @@ export interface Agent {
   modelUsed?: string;
   generatedArtifact?: string;
   executionLatencyMs?: number;
+  responsibility?: string;
+  allowedTools?: string[];
+  parentAgentId?: string;
+  rawOutput?: string;
 }
-
 
 export interface ModelRoutingOption {
   role: string;
@@ -68,6 +80,9 @@ export interface TestQualityAudit {
   rawTestContent?: string;
   untestedFiles?: string[];
   auditedAt?: string;
+  executedRealTests?: boolean;
+  testsPassed?: number;
+  testsFailed?: number;
 }
 
 export interface AstAuditResult {
@@ -78,6 +93,7 @@ export interface AstAuditResult {
   port3000Configured: boolean;
   brokenReferences?: string[];
   auditedAt?: string;
+  filesParsed?: number;
 }
 
 export interface DeploymentCertificate {
@@ -88,13 +104,227 @@ export interface DeploymentCertificate {
   reason?: string;
 }
 
+// ==========================================
+// Orchestrator, Tool Calling & Live Telemetry Types
+// ==========================================
+
+export type ExecutionRunStatus =
+  | 'queued'
+  | 'running'
+  | 'awaiting_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type TaskNodeStatus =
+  | 'pending'
+  | 'blocked'
+  | 'running'
+  | 'awaiting_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'skipped';
+
+export interface TaskNode {
+  id: string;
+  runId: string;
+  projectId: string;
+  title: string;
+  description: string;
+  agentId: string;
+  agentName: string;
+  subagentId?: string;
+  subagentName?: string;
+  milestone?: number;
+  dependsOn: string[];
+  status: TaskNodeStatus;
+  idempotencyKey: string;
+  attempt: number;
+  maxRetries: number;
+  priority: number;
+  inputContext?: Record<string, any>;
+  outputArtifact?: any;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+}
+
+export type ToolCategory =
+  | 'workspace'
+  | 'terminal'
+  | 'git'
+  | 'research'
+  | 'testing'
+  | 'external'
+  | 'orchestration';
+
+export type ToolExecutionStatus =
+  | 'pending'
+  | 'running'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'rejected'
+  | 'success'
+  | 'failed'
+  | 'cancelled';
+
+export interface ToolExecutionRecord {
+  executionId: string;
+  runId: string;
+  projectId: string;
+  taskId?: string;
+  agentId: string;
+  agentName: string;
+  subagentId?: string;
+  subagentName?: string;
+  toolName: string;
+  category: ToolCategory;
+  status: ToolExecutionStatus;
+  timestamp: string;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  retries: number;
+  inputArgs: Record<string, any>;
+  output?: any;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  approvalId?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface AgentCommunication {
+  id: string;
+  runId: string;
+  projectId: string;
+  fromAgentId: string;
+  fromAgentName: string;
+  toAgentId: string;
+  toAgentName: string;
+  type: 'delegation' | 'context_share' | 'result' | 'self_heal' | 'error' | 'message';
+  summary: string;
+  payload?: any;
+  timestamp: string;
+}
+
+export type ApprovalActionType =
+  | 'destructive_command'
+  | 'important_file_overwrite'
+  | 'git_mutation'
+  | 'database_mutation'
+  | 'deployment'
+  | 'external_integration';
+
+export interface ApprovalRequest {
+  id: string;
+  runId: string;
+  projectId: string;
+  taskId?: string;
+  executionId?: string;
+  agentId: string;
+  agentName: string;
+  toolName: string;
+  actionType: ApprovalActionType;
+  riskLevel: 'medium' | 'high' | 'critical';
+  summary: string;
+  details: Record<string, any>;
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  createdAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  resolutionNote?: string;
+}
+
+export type ExecutionEventType =
+  | 'run:started'
+  | 'run:completed'
+  | 'run:failed'
+  | 'run:cancelled'
+  | 'task:created'
+  | 'task:updated'
+  | 'agent:status'
+  | 'subagent:created'
+  | 'agent:message'
+  | 'tool:pending'
+  | 'tool:running'
+  | 'tool:completed'
+  | 'tool:failed'
+  | 'approval:requested'
+  | 'approval:resolved'
+  | 'test:result'
+  | 'build:result'
+  | 'log:info';
+
+export interface ExecutionEvent {
+  seq: number;
+  eventId: string;
+  runId: string;
+  projectId: string;
+  timestamp: string;
+  type: ExecutionEventType;
+  agentId?: string;
+  subagentId?: string;
+  taskId?: string;
+  executionId?: string;
+  data: Record<string, any>;
+}
+
+export interface ExecutionRunMetrics {
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  cancelledTasks: number;
+  totalToolCalls: number;
+  succeededToolCalls: number;
+  failedToolCalls: number;
+  totalTokensUsed: number;
+  totalDurationMs: number;
+}
+
+export interface ExecutionRun {
+  runId: string;
+  projectId: string;
+  status: ExecutionRunStatus;
+  prompt: string;
+  triggeredBy: 'create' | 'rebuild' | 'self_heal' | 'manual';
+  modelConfig: Record<string, string>;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  error?: string;
+  cancelledReason?: string;
+  recoveredFromRestart?: boolean;
+  tasks: TaskNode[];
+  dynamicSubagents: SubAgent[];
+  toolExecutions: ToolExecutionRecord[];
+  communications: AgentCommunication[];
+  approvals: ApprovalRequest[];
+  metrics: ExecutionRunMetrics;
+}
+
+export interface ToolAvailabilityStatus {
+  name: string;
+  category: ToolCategory;
+  description: string;
+  available: boolean;
+  configured: boolean;
+  reason?: string;
+  requiresApproval: boolean;
+  allowedAgents: string[];
+}
+
 export interface Project {
   id: string;
   userId?: string;
   name: string;
   description: string;
   prompt: string;
-  status: 'planning' | 'designing' | 'coding' | 'testing' | 'deployed' | 'idle' | 'building' | 'failed' | 'generating' | 'review';
+  projectClassification?: any;
+  status: 'planning' | 'designing' | 'coding' | 'testing' | 'deployed' | 'idle' | 'building' | 'failed' | 'generating' | 'review' | 'cancelled';
   deploymentStatus?: 'idle' | 'queued' | 'building' | 'deployed' | 'failed';
   deploymentError?: string;
   files: FileNode[];
@@ -111,6 +341,8 @@ export interface Project {
   astAudit?: AstAuditResult;
   deploymentCertificate?: DeploymentCertificate;
   selfHealingAttempts?: Record<number, number>;
+  activeRunId?: string;
+  lastExecutionRun?: ExecutionRun;
 }
 
 export interface SubscriptionPlan {
@@ -243,5 +475,3 @@ export interface CMSPage {
   status: 'published' | 'draft';
   lastUpdated?: string;
 }
-
-

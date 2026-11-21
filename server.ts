@@ -4,17 +4,13 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type } from '@google/genai';
 import { PaymentProviderRegistry } from './src/lib/payment-abstraction.js';
 import { db as firestoreDb, auth as firestoreAuth } from './src/lib/firebase.js';
 import { collection as firestoreCollection, getDocs as firestoreGetDocs, doc as firestoreDoc, getDoc as firestoreGetDoc, setDoc as firestoreSetDoc } from 'firebase/firestore';
 import { callMultiProviderLLM, getProviderConfigStatus } from './src/lib/multi-llm-provider.js';
 import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG } from './src/config/agentRoster.js';
-import { buildAgentPrompt } from './src/config/agentPromptRegistry.js';
 import { classifyProjectPrompt } from './src/config/outputContracts.js';
-import { buildMilestoneUserMessage, loadAgentPrompt } from './src/lib/agentPromptLoader.js';
 import { generateFullProjectFiles } from './src/lib/projectFilesGenerator.js';
-import { synthesizeProjectArtifact } from './src/lib/projectSynthesizer.js';
 import { pushProjectToGitHub, deployProjectToVercel, checkVercelDeploymentStatus, ensureProductionDeployFiles } from './src/lib/deployService.js';
 import {
   ARIA_SYSTEM_INSTRUCTIONS,
@@ -23,8 +19,18 @@ import {
   runCoverageAnalysis,
   runAstAudit,
   delegateMilestoneWithFallback,
-  generateSelfHealingPrompt
 } from './src/lib/ariaOrchestratorEngine.js';
+import { executionStore } from './src/lib/orchestrator/executionStore.js';
+import { eventBus } from './src/lib/orchestrator/eventBus.js';
+import {
+  orchestratorEngine,
+  buildInitialAgentsForProject
+} from './src/lib/orchestrator/orchestratorEngine.js';
+import {
+  getAllToolsAvailabilityStatus,
+  runTypeScriptAstDiagnostics
+} from './src/lib/tools/toolRegistry.js';
+import { redactSecrets } from './src/lib/security/executionSecurity.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -56,74 +62,6 @@ app.use(express.json({
 }));
 
 const PORT = Number(process.env.PORT) || 3000;
-
-/**
- * Models occasionally preface an otherwise valid payload with prose or wrap it
- * in a Markdown code fence. Treat that as an invalid enhancement, not a failed
- * project generation: the caller can continue with the local scaffold.
- */
-function parseParkerProjectResponse(text: string): Record<string, any> {
-  const trimmed = text.trim();
-  const fencedJson = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const candidate = (fencedJson || trimmed).trim();
-  const parsed = JSON.parse(candidate);
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('response must be a JSON object');
-  }
-  if (!Array.isArray(parsed.files)) {
-    throw new Error('response is missing a files array');
-  }
-
-  return parsed;
-}
-
-function validateGeneratedProject(data: Record<string, any>): void {
-  const files = data.files as Array<{ path?: string; content?: string }>;
-  const paths = new Set(files.map((file) => file.path));
-  const appFile = files.find((file) => file.path === 'src/App.tsx');
-  const html = files.find((file) => file.path === 'index.html');
-  if (!paths.has('package.json') || !appFile?.content || !html?.content) {
-    throw new Error('response is missing the runnable Vite entry files');
-  }
-  if (!/^\s*<!doctype\s+html/i.test(html.content) || !/<div\s+id=["']root["']/i.test(html.content)) {
-    throw new Error('index.html is not a valid Vite HTML document');
-  }
-  if (/Add Record|Database & CRUD|REST API Tester/i.test(appFile.content) && /restaurant|portfolio|landing page|static site/i.test(data.description || '')) {
-    throw new Error('response substituted a generic dashboard for the requested product');
-  }
-}
-
-/** Local generation is intentionally prompt-aware, never a dashboard-shaped placeholder. */
-function createLocalProjectArtifact(name: string, prompt: string, slug: string) {
-  const files = generateFullProjectFiles(name, prompt, slug).map(({ path, content }: any) => ({ path, content }));
-  return {
-    name,
-    description: prompt.slice(0, 240),
-    prd: `# ${name}\n\n## Source request\n\n${prompt}\n\n## Acceptance gate\n\nThe generated experience must reflect this request, be responsive, and honor reduced-motion preferences.`,
-    architecture: `# Architecture\n\n## Project type\n\nPrompt-classified client application.\n\n## Generated modules\n\n${files.map((file: any) => `- \`${file.path}\``).join('\n')}`,
-    files,
-  };
-}
-
-// Lazy initialize Gemini API Client
-let aiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI | null {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
-      aiClient = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
-    }
-  }
-  return aiClient;
-}
 
 // In-Memory Database / Store
 const db = {
@@ -239,8 +177,22 @@ async function getActivePlans(): Promise<any[]> {
 // Immediately warm cache on startup
 getActivePlans().catch(() => {});
 
-// Active SRE stream stores for streaming panel logs
+// Hydrate persisted projects on boot & active SRE stream stores
+executionStore.ensureLoaded();
+db.projects.push(...executionStore.getAllProjects());
 const activeSreStreams: Record<string, any[]> = {};
+
+function findOrHydrateProject(projectId: string) {
+  let proj = db.projects.find((p) => p.id === projectId);
+  if (!proj) {
+    const stored = executionStore.getProject(projectId);
+    if (stored) {
+      db.projects.push(stored);
+      proj = stored;
+    }
+  }
+  return proj;
+}
 
 // Express Endpoints
 
@@ -252,17 +204,23 @@ app.get('/api/health', (req, res) => {
 // 1. Projects Fetching
 app.get('/api/projects', (req, res) => {
   const { userId } = req.query;
+  const all = executionStore.getAllProjects();
+  const merged = all.length > 0 ? all : db.projects;
   if (userId) {
-    const userProjects = db.projects.filter((p: any) => p.userId === userId || !p.userId);
+    const userProjects = merged.filter((p: any) => p.userId === userId || !p.userId);
     return res.json(userProjects);
   }
-  res.json(db.projects);
+  res.json(merged);
 });
 
 app.get('/api/projects/:id', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
-  if (!project) return res.status(404).json({ error: 'Project not found' });
-  res.json(project);
+  const project = findOrHydrateProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found in server memory', id: req.params.id });
+  const latestRun = executionStore.getLatestRunForProject(project.id);
+  res.json({
+    ...project,
+    lastExecutionRun: latestRun || project.lastExecutionRun,
+  });
 });
 
 app.delete('/api/projects/:id', (req, res) => {
@@ -270,12 +228,14 @@ app.delete('/api/projects/:id', (req, res) => {
   if (index !== -1) {
     db.projects.splice(index, 1);
   }
+  orchestratorEngine.cancelRun(req.params.id, 'Project deleted');
+  executionStore.deleteProject(req.params.id);
   delete activeSreStreams[req.params.id];
   return res.json({ success: true, message: 'Project removed successfully' });
 });
 
 app.put('/api/projects/:id', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const { name, description, status, deployedUrl, githubRepoUrl, vercelDeployUrl } = req.body;
   if (name) project.name = name;
@@ -284,6 +244,8 @@ app.put('/api/projects/:id', (req, res) => {
   if (deployedUrl) project.deployedUrl = deployedUrl;
   if (githubRepoUrl) project.githubRepoUrl = githubRepoUrl;
   if (vercelDeployUrl) project.vercelDeployUrl = vercelDeployUrl;
+  project.updatedAt = new Date().toISOString();
+  executionStore.saveProject(project);
   res.json({ success: true, project });
 });
 
@@ -484,33 +446,34 @@ app.get('/api/deploy/config', (req, res) => {
   });
 });
 
-// 2. Project Creation (Hierarchical Multi-Agent Swarm with CEO Validation & Multi-Model Routing)
+// 2. Project Creation (Real Multi-Agent DAG Orchestrator + Tool Calling + Execution Persistence)
 app.post('/api/projects', async (req, res) => {
-  const { prompt, modelConfig } = req.body;
-  if (typeof prompt !== 'string' || !prompt.trim()) return res.status(400).json({ error: 'Prompt is required' });
+  const { prompt, modelConfig, requireApprovalForCriticalWrites, preApprovedCriticalTools } = req.body || {};
+  if (typeof prompt !== 'string' || !prompt.trim()) {
+    return res.status(400).json({ error: 'Prompt is required' });
+  }
+
   const generationCreditCost = 350;
-  // Ensure development environment always has sufficient sandbox execution credits
   if (db.activeSubscription.creditsRemaining < generationCreditCost) {
     db.activeSubscription.creditsRemaining = 10000;
   }
+
   const fullPrompt = prompt.trim();
-  console.log('[prompt:server-received]', fullPrompt);
   const projectClassification = classifyProjectPrompt(fullPrompt);
 
-  // Generate random id and fully-fledged project files
-  const projectId = `proj_${Math.random().toString(36).substring(2, 9)}`;
-  // A display name is intentionally separate from fullPrompt. It must never enter model input.
-  const requestedName = typeof req.body.name === 'string' ? req.body.name : '';
-  const cleanAppName = (requestedName || fullPrompt.split(/[\n,.]/, 1)[0].slice(0, 64)).replace(/[^a-zA-Z0-9\s-]/g, '').trim() || 'Autonomous Application';
-  // Synthesize prompt-tailored initial files immediately so source code exists right from creation
-  const artifact = synthesizeProjectArtifact(fullPrompt, cleanAppName);
-  const initialFiles: any[] = [
-    { path: 'docs/PRD.md', name: 'PRD.md', type: 'file', content: artifact.prd },
-    { path: 'docs/ARCHITECTURE.md', name: 'ARCHITECTURE.md', type: 'file', content: artifact.architecture },
-    ...artifact.files
-  ];
+  const projectId = `proj_${crypto.randomBytes(4).toString('hex')}`;
+  const requestedName = typeof req.body?.name === 'string' ? req.body.name : '';
+  const cleanAppName =
+    (requestedName || fullPrompt.split(/[\n,.]/, 1)[0].slice(0, 64))
+      .replace(/[^a-zA-Z0-9\s-]/g, '')
+      .trim() || 'Autonomous Application';
 
-  const initialProject = {
+  const resolvedModelConfig = {
+    ...DEFAULT_MODEL_CONFIG,
+    ...(modelConfig && typeof modelConfig === 'object' ? modelConfig : {}),
+  };
+
+  const initialProject: any = {
     id: projectId,
     name: cleanAppName,
     description: fullPrompt.slice(0, 180),
@@ -518,1232 +481,39 @@ app.post('/api/projects', async (req, res) => {
     projectClassification,
     status: 'generating' as const,
     createdAt: new Date().toISOString(),
-    aiCreditsUsed: 350,
-    modelConfig: modelConfig || DEFAULT_MODEL_CONFIG,
-    files: initialFiles,
+    updatedAt: new Date().toISOString(),
+    aiCreditsUsed: generationCreditCost,
+    modelConfig: resolvedModelConfig,
+    files: [],
     deployedUrl: `/preview/${projectId}`,
-    agents: [
-      {
-        id: 'ag_ceo',
-        name: 'Aria CEO',
-        role: 'Chief AI Executive & Orchestrator',
-        tier: 'ceo' as const,
-        provider: 'gemini' as const,
-        status: 'thinking' as const,
-        avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=80&fit=crop&q=60',
-        model: AGENT_ROSTER.aria.defaultModel,
-        currentTask: 'Deconstructing intent and setting milestone directives for Senior Leads',
-        validationStatus: 'in_review' as const,
-        ceoDirectives: [
-          'Deconstruct user prompt into high-impact functional modules',
-          'Enforce strict verification on PRD, Architecture, and UI state consistency',
-          'Deploy real-time diagnostic remediation to any failing subagent'
-        ],
-        outputLogs: []
-      },
-      {
-        id: 'ag_pm',
-        name: 'Parker Lead',
-        role: 'Senior Product Manager',
-        tier: 'senior' as const,
-        provider: 'openrouter' as const,
-        status: 'idle' as const,
-        avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=80&fit=crop&q=60',
-        model: AGENT_ROSTER.parker.defaultModel,
-        currentTask: 'Standing by for CEO directive on PRD scoping',
-        validationStatus: 'pending' as const,
-        subagents: [
-          { id: `sub_pm_1_${projectId}`, name: 'Spec Writer', role: 'PRD Modeler', task: 'Synthesizing feature matrix & core entities', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.parker.defaultModel },
-          { id: `sub_pm_2_${projectId}`, name: 'User Flow Synthesizer', role: 'UX Analyst', task: 'Modeling edge-case user actions & workflows', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.parker.defaultModel }
-        ],
-        outputLogs: []
-      },
-      {
-        id: 'ag_arch',
-        name: 'Sophia Lead',
-        role: 'Senior Solution Architect',
-        tier: 'senior' as const,
-        provider: 'openrouter' as const,
-        status: 'idle' as const,
-        avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=80&fit=crop&q=60',
-        model: AGENT_ROSTER.sophia.defaultModel,
-        currentTask: 'Standing by for PRD validation from CEO',
-        validationStatus: 'pending' as const,
-        subagents: [
-          { id: `sub_arch_1_${projectId}`, name: 'Data Schema Modeler', role: 'DB Architect', task: 'Drafting strict TypeScript interfaces & database schemas', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.sophia.defaultModel },
-          { id: `sub_arch_2_${projectId}`, name: 'API Contract Validator', role: 'API Architect', task: 'Verifying REST routes & security middleware', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.sophia.defaultModel }
-        ],
-        outputLogs: []
-      },
-      {
-        id: 'ag_fe',
-        name: 'Frank Lead',
-        role: 'Senior Frontend Engineer',
-        tier: 'senior' as const,
-        provider: 'nvidia' as const,
-        status: 'idle' as const,
-        avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=80&fit=crop&q=60',
-        model: AGENT_ROSTER.frank.defaultModel,
-        currentTask: 'Standing by for Architecture approval',
-        validationStatus: 'pending' as const,
-        subagents: [
-          { id: `sub_fe_1_${projectId}`, name: 'Component Tree Builder', role: 'React Developer', task: 'Synthesizing responsive Tailwind components', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.frank.defaultModel },
-          { id: `sub_fe_2_${projectId}`, name: 'Interactive State Polisher', role: 'UI Engineer', task: 'Binding interactive state hooks & animations', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.frank.defaultModel }
-        ],
-        outputLogs: []
-      },
-      {
-        id: 'ag_qa',
-        name: 'Quinn Lead',
-        role: 'Senior QA & Testing Lead',
-        tier: 'senior' as const,
-        provider: 'groq' as const,
-        status: 'idle' as const,
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&fit=crop&q=60',
-        model: AGENT_ROSTER.quinn.defaultModel,
-        currentTask: 'Standing by for code synthesis',
-        validationStatus: 'pending' as const,
-        subagents: [
-          { id: `sub_qa_1_${projectId}`, name: 'Unit Test Runner', role: 'Test Engineer', task: 'Running unit test assertions & regression probes', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.quinn.defaultModel },
-          { id: `sub_qa_2_${projectId}`, name: 'Integration & Edge Verifier', role: 'Security Auditor', task: 'Auditing OWASP Top 10 rules & input boundaries', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.quinn.defaultModel }
-        ],
-        outputLogs: []
-      },
-      {
-        id: 'ag_sre',
-        name: 'Devon Lead',
-        role: 'Senior DevOps & SRE Lead',
-        tier: 'senior' as const,
-        provider: 'groq' as const,
-        status: 'idle' as const,
-        avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=80&fit=crop&q=60',
-        model: AGENT_ROSTER.devon.defaultModel,
-        currentTask: 'Standing by for QA pass',
-        validationStatus: 'pending' as const,
-        subagents: [
-          { id: `sub_sre_1_${projectId}`, name: 'Docker Container Builder', role: 'DevOps Engineer', task: 'Building multi-stage container & mapping port 3000', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.devon.defaultModel },
-          { id: `sub_sre_2_${projectId}`, name: 'Ingress & Self-Healing Daemon', role: 'SRE Specialist', task: 'Configuring health probes & auto-recovery hooks', status: 'idle' as const, instructionsReceived: [], model: AGENT_ROSTER.devon.defaultModel }
-        ],
-        outputLogs: []
-      }
-    ],
-    userId: req.body.userId || undefined
+    agents: buildInitialAgentsForProject(projectId, resolvedModelConfig),
+    userId: req.body?.userId || undefined,
   };
 
   db.projects.push(initialProject);
   db.activeSubscription.creditsRemaining -= generationCreditCost;
+  executionStore.saveProject(initialProject);
 
-  // Send back full initial project so client can immediately render and persist to Firestore
-  res.json(initialProject);
-
-  // Stream logs storage
-  const streamLogs: any[] = [];
-  activeSreStreams[projectId] = streamLogs;
-
-  const writeSwarmState = (projId: string) => {
-    const proj = db.projects.find(p => p.id === projId);
-    if (proj) {
-      proj.updatedAt = new Date().toISOString();
-    }
-  };
-
-  const pushLog = (agentRole: string, message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
-    const log = { timestamp: new Date().toLocaleTimeString(), agent: agentRole, message, type };
-    streamLogs.push(log);
-    const proj = db.projects.find(p => p.id === projectId);
-    if (proj) {
-      const ag = proj.agents.find(a => a.role === agentRole || a.name === agentRole);
-      if (ag) {
-        ag.outputLogs.push({ timestamp: log.timestamp, message, type });
-        if (type === 'error') ag.status = 'failed';
-        else if (type === 'warning') ag.status = 'healing';
-        else if (type === 'success') ag.status = 'complete';
-        else ag.status = 'active';
-      }
-      writeSwarmState(projectId);
-    }
-  };
-
-  // Async Multi-Agent Swarm Execution Loop
-  (async () => {
-    try {
-      // 1. CEO Strategic Planning & Delegation
-      pushLog('Aria CEO', `[CEO Directive] Received full prompt: "${fullPrompt}". Deconstructing user intent into work orders.`, 'info');
-      await new Promise(r => setTimeout(r, 900));
-
-      pushLog('Aria CEO', '[CEO Directive] Assigning Milestone 1 (Product Requirements) to Senior PM Parker Lead.', 'info');
-      
-      const proj = db.projects.find(p => p.id === projectId);
-      if (proj) {
-        const ceoAg = proj.agents.find(a => a.id === 'ag_ceo');
-        if (ceoAg) {
-          ceoAg.assignedPrompt = buildAgentPrompt('aria', fullPrompt, 'Classify the project, then deconstruct it into five technical work orders with architecture boundaries, schema validation, and security gates.', projectClassification);
-          ceoAg.modelUsed = `Google Gemini (${AGENT_ROSTER.aria.defaultModel})`;
-          ceoAg.generatedArtifact = 'Milestone Work Orders & Execution Roadmap';
-        }
-        const pmAgent = proj.agents.find(a => a.id === 'ag_pm');
-        if (pmAgent) {
-          pmAgent.status = 'active';
-          pmAgent.assignedPrompt = buildAgentPrompt('parker', fullPrompt, 'Synthesize the PRD, personas, user journeys, and milestone acceptance criteria.', projectClassification);
-          pmAgent.modelUsed = `OpenRouter (${AGENT_ROSTER.parker.defaultModel})`;
-          if (pmAgent.subagents) {
-            pmAgent.subagents[0].status = 'active';
-            pmAgent.subagents[0].instructionsReceived.push(`Structure full PRD requirements for: ${prompt}`);
-          }
-        }
-      }
-
-      // 2. Senior PM Execution (OpenRouter Free Tier / Gemini Core)
-      pushLog('Parker Lead', `Instructing subagents (Spec Writer & User Flow Synthesizer) via OpenRouter (${AGENT_ROSTER.parker.defaultModel})...`, 'info');
-      await new Promise(r => setTimeout(r, 900));
-      
-      console.log('[prompt:parker-request]', fullPrompt);
-      console.log('[project:classification]', JSON.stringify(projectClassification));
-      const appTitle = initialProject.name;
-      const generatedSlug = appTitle.toLowerCase().replace(/[^a-z0-9]/g, '-');
-
-      // Call Multi-Model LLM for project generation
-      let generatedData: any = null;
-      let rawParkerOutput = '';
-
-      try {
-        const pmResult = await callMultiProviderLLM({
-          provider: 'openrouter',
-          model: AGENT_ROSTER.parker.defaultModel,
-          systemInstruction: loadAgentPrompt('parker'),
-          prompt: buildMilestoneUserMessage(fullPrompt, { ...projectClassification, task: `Generate a complete, production-grade project appropriate for the classified project type.
-Return a strict JSON object with this shape:
-{
-  "name": "${appTitle}",
-  "description": "A comprehensive solution for ${fullPrompt}",
-  "prd": "markdown product requirement document",
-  "architecture": "markdown full-stack system architecture with DB schema and REST API specs",
-  "files": [
-    { "path": "src/App.tsx", "content": "React 19 single-page UI with Tailwind CSS and full interactivity" },
-    { "path": "src/components/Header.tsx", "content": "Header component" },
-    { "path": "src/components/Dashboard.tsx", "content": "Dashboard component" },
-    { "path": "src/types.ts", "content": "TypeScript types and interfaces" },
-    { "path": "src/lib/api.ts", "content": "Client-side API service layer" },
-    { "path": "server/server.ts", "content": "Express.js REST API backend with CRUD routes" },
-    { "path": "server/schema.sql", "content": "PostgreSQL / SQLite schema definitions" },
-    { "path": "server/db.ts", "content": "Backend persistence layer" },
-    { "path": "tests/app.test.ts", "content": "Unit and integration test suites" },
-    { "path": "package.json", "content": "package.json with scripts and dependencies" },
-    { "path": "README.md", "content": "Setup and run instructions" },
-    { "path": "Dockerfile", "content": "Multi-stage Dockerfile" },
-    { "path": "docker-compose.yml", "content": "Compose configuration" }
-  ]
-}` }),
-          maxTokens: 2048
-        });
-        rawParkerOutput = pmResult.text || '';
-
-        if (pmResult.text) {
-          generatedData = parseParkerProjectResponse(pmResult.text);
-          validateGeneratedProject(generatedData);
-          pushLog('Parker Lead', `PRD & Full-Stack architecture synthesized via ${pmResult.provider} (${pmResult.model}).`, 'success');
-          if (proj) {
-            const pmAg = proj.agents.find(a => a.id === 'ag_pm');
-            if (pmAg) {
-              pmAg.generatedArtifact = 'PRD.md & Full-Stack Feature Matrix';
-              pmAg.modelUsed = `${pmResult.provider} (${pmResult.model})`;
-              pmAg.rawOutput = pmResult.text;
-            }
-          }
-        }
-      } catch (err: any) {
-        const reason = `Parker returned a non-conforming response (${err.message}); continuing with the local project scaffold.`;
-        console.warn(reason);
-        pushLog('Parker Lead', reason, 'warning');
-        if (proj) {
-          const pmAg = proj.agents.find(a => a.id === 'ag_pm');
-          if (pmAg) pmAg.rawOutput = rawParkerOutput;
-          delete proj.generationError;
-        }
-      }
-
-      // A provider response is an enhancement, not permission to replace the
-      // requested product with a generic dashboard. When it is missing or
-      // invalid, synthesize a deterministic, prompt-specific project instead.
-      if (!generatedData || !Array.isArray(generatedData.files) || generatedData.files.length < 3) {
-        generatedData = createLocalProjectArtifact(appTitle, fullPrompt, generatedSlug);
-        pushLog('Parker Lead', 'Using the prompt-aware local implementation after provider output failed validation.', 'warning');
-      }
-
-      // Dynamic High-Fidelity Full-Stack Synthesizer (Ensures 100% reliable full-stack output)
-      if (!generatedData || !generatedData.files || generatedData.files.length < 3) {
-        generatedData = {
-          name: appTitle,
-          description: `Production-ready full-stack application built for: "${prompt}"`,
-          prd: `# Product Requirements Document: ${appTitle}
-
-## 1. Executive Overview
-${prompt}
-
-## 2. Core Functional Requirements
-- **Interactive UI**: Responsive React frontend styled with Tailwind CSS, stateful components, and live telemetry.
-- **RESTful API**: Express backend server handling CRUD transactions, health probes, and authentication.
-- **Data Persistence**: Relational SQL schema with foreign key constraints, indexes, and transactional queries.
-- **SRE & Security**: Multi-stage Docker container with non-root security context, automated health checks, and 0 OWASP vulnerabilities.
-
-## 3. User Stories
-- As an end user, I can interact with the dynamic dashboard and submit records seamlessly.
-- As a developer, I can run both frontend and backend services via Docker Compose or npm scripts.
-- As an SRE, I can monitor ingress latency and database throughput on port 3000.`,
-          architecture: `# System Architecture Blueprint: ${appTitle}
-
-## 1. Topology Overview
-\`\`\`
-[ React 19 Frontend ]  <--->  [ Express API Gateway (Port 3000) ]  <--->  [ SQL Store / SQLite ]
-       |                                     |                                    |
-   (Tailwind)                           (REST / JSON)                      (ACID Schema)
-\`\`\`
-
-## 2. Component Hierarchy
-- \`src/App.tsx\`: Primary application controller and view switcher.
-- \`src/components/Header.tsx\`: Real-time navigation bar with connection status.
-- \`src/components/Dashboard.tsx\`: High-density operational data visualizer.
-- \`src/types.ts\`: Domain models and API contract definitions.
-- \`src/lib/api.ts\`: Client-side HTTP client with resilient fallback handling.
-- \`server/server.ts\`: Express server with CRUD endpoints (\`/api/entities\`, \`/api/health\`, \`/api/stats\`).
-- \`server/schema.sql\`: DDL schema for relational persistence.
-- \`server/db.ts\`: Repository layer with parameterized queries.`,
-          files: [
-            {
-              path: 'src/App.tsx',
-              content: `import React, { useState, useEffect } from 'react';
-import Header from './components/Header';
-import Dashboard from './components/Dashboard';
-import { EntityItem, AppStats } from './types';
-import { fetchEntities, createEntity, deleteEntity, getSystemHealth } from './lib/api';
-import { Sparkles, Plus, RefreshCw, Server, Database, CheckCircle2, ShieldCheck, Activity, Terminal } from 'lucide-react';
-
-export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'records' | 'api' | 'architecture'>('dashboard');
-  const [entities, setEntities] = useState<EntityItem[]>([]);
-  const [stats, setStats] = useState<AppStats>({ totalRecords: 0, activeUsers: 142, uptime: '99.98%', latencyMs: 14 });
-  const [titleInput, setTitleInput] = useState('');
-  const [categoryInput, setCategoryInput] = useState('Core Engine');
-  const [isLoading, setIsLoading] = useState(false);
-  const [statusNotice, setStatusNotice] = useState<string | null>(null);
-
-  const loadData = async () => {
-    setIsLoading(true);
-    try {
-      const data = await fetchEntities();
-      setEntities(data);
-      setStats(prev => ({ ...prev, totalRecords: data.length }));
-    } catch (e) {
-      console.warn('API fetch warning:', e);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!titleInput.trim()) return;
-    setIsLoading(true);
-    try {
-      const created = await createEntity({
-        title: titleInput.trim(),
-        category: categoryInput,
-        status: 'active'
-      });
-      setEntities(prev => [created, ...prev]);
-      setTitleInput('');
-      setStatusNotice(\`Entity "\${created.title}" successfully created and saved!\`);
-      setTimeout(() => setStatusNotice(null), 3000);
-    } catch (err: any) {
-      setStatusNotice(\`Error: \${err.message}\`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    try {
-      await deleteEntity(id);
-      setEntities(prev => prev.filter(e => e.id !== id));
-      setStatusNotice('Record deleted cleanly.');
-      setTimeout(() => setStatusNotice(null), 2500);
-    } catch (err: any) {
-      console.error(err);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col font-sans selection:bg-violet-500 selection:text-white">
-      {/* 1. Header Component */}
-      <Header activeTab={activeTab} setActiveTab={setActiveTab} appName="${appTitle}" />
-
-      {/* Notification Toast */}
-      {statusNotice && (
-        <div className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-xs font-mono py-2 px-4 text-center font-bold animate-fadeIn">
-          {statusNotice}
-        </div>
-      )}
-
-      {/* Main Viewport */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
-        {/* DASHBOARD TAB */}
-        {activeTab === 'dashboard' && (
-          <div className="space-y-6">
-            {/* Hero Banner */}
-            <div className="bg-[#121215] border border-[#222222] p-6 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-              <div>
-                <div className="flex items-center space-x-2 text-[10px] font-mono text-violet-400 font-bold uppercase tracking-widest">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Full-Stack Application Blueprint</span>
-                </div>
-                <h1 className="text-2xl font-black text-white mt-1 uppercase tracking-tight">${appTitle}</h1>
-                <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-                  ${prompt}
-                </p>
-              </div>
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={loadData}
-                  disabled={isLoading}
-                  className="bg-[#18181b] hover:bg-[#222225] border border-[#333333] text-xs font-mono px-3.5 py-2 text-slate-200 transition flex items-center space-x-1.5"
-                >
-                  <RefreshCw className={\`w-3.5 h-3.5 \${isLoading ? 'animate-spin text-violet-400' : ''}\`} />
-                  <span>Sync Backend</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Dashboard Component */}
-            <Dashboard stats={stats} entities={entities} />
-          </div>
-        )}
-
-        {/* RECORDS & CRUD TAB */}
-        {activeTab === 'records' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Create Form */}
-            <div className="bg-[#121215] border border-[#222222] p-5 rounded-xl space-y-4">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center space-x-2">
-                <Plus className="w-4 h-4 text-violet-400" />
-                <span>Create New Record</span>
-              </h2>
-              <form onSubmit={handleCreate} className="space-y-3">
-                <div>
-                  <label className="text-[10px] font-mono text-slate-400 uppercase">Record Title</label>
-                  <input
-                    type="text"
-                    value={titleInput}
-                    onChange={e => setTitleInput(e.target.value)}
-                    placeholder="Enter record name or feature..."
-                    className="w-full bg-[#08080a] border border-[#27272a] px-3 py-2 text-xs text-white placeholder-slate-600 outline-none focus:border-violet-500 mt-1"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-mono text-slate-400 uppercase">Category</label>
-                  <select
-                    value={categoryInput}
-                    onChange={e => setCategoryInput(e.target.value)}
-                    className="w-full bg-[#08080a] border border-[#27272a] px-3 py-2 text-xs text-white outline-none focus:border-violet-500 mt-1"
-                  >
-                    <option value="Core Engine">Core Engine</option>
-                    <option value="API Integration">API Integration</option>
-                    <option value="Security Policy">Security Policy</option>
-                    <option value="UI Component">UI Component</option>
-                  </select>
-                </div>
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full bg-white hover:bg-violet-400 text-black text-xs font-bold uppercase tracking-wider py-2.5 transition flex items-center justify-center space-x-1.5"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>{isLoading ? 'Saving...' : 'Add Record'}</span>
-                </button>
-              </form>
-            </div>
-
-            {/* List Table */}
-            <div className="lg:col-span-2 bg-[#121215] border border-[#222222] p-5 rounded-xl space-y-4">
-              <div className="flex justify-between items-center">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                  Active Database Entities ({entities.length})
-                </h2>
-                <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/20">
-                  SQL Table: entities
-                </span>
-              </div>
-              <div className="border border-[#222222] overflow-x-auto text-xs font-mono">
-                <table className="w-full text-left">
-                  <thead className="bg-[#08080a] text-slate-400 border-b border-[#222222]">
-                    <tr>
-                      <th className="p-3">ID</th>
-                      <th className="p-3">Title</th>
-                      <th className="p-3">Category</th>
-                      <th className="p-3">Status</th>
-                      <th className="p-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#1e1e22] text-slate-300">
-                    {entities.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="p-4 text-center text-slate-500">
-                          No records in database. Create one on the left.
-                        </td>
-                      </tr>
-                    ) : (
-                      entities.map(e => (
-                        <tr key={e.id} className="hover:bg-[#18181b]">
-                          <td className="p-3 text-slate-500">#{e.id.substring(0, 6)}</td>
-                          <td className="p-3 font-bold text-white">{e.title}</td>
-                          <td className="p-3 text-slate-400">{e.category}</td>
-                          <td className="p-3">
-                            <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] px-1.5 py-0.5 font-bold uppercase">
-                              {e.status}
-                            </span>
-                          </td>
-                          <td className="p-3 text-right">
-                            <button
-                              onClick={() => handleDelete(e.id)}
-                              className="text-rose-400 hover:text-rose-300 text-[10px] uppercase font-bold"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* REST API TAB */}
-        {activeTab === 'api' && (
-          <div className="bg-[#121215] border border-[#222222] p-6 rounded-xl space-y-4">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-white">Full-Stack REST API Endpoints</h2>
-            <div className="space-y-3 font-mono text-xs">
-              <div className="bg-[#08080a] p-3 border border-[#222] flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <span className="bg-emerald-500/20 text-emerald-400 px-2 py-0.5 font-bold text-[10px]">GET</span>
-                  <span className="text-slate-200">/api/v1/entities</span>
-                </div>
-                <span className="text-slate-500 text-[10px]">Fetch all entities (JSON)</span>
-              </div>
-              <div className="bg-[#08080a] p-3 border border-[#222] flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <span className="bg-blue-500/20 text-blue-400 px-2 py-0.5 font-bold text-[10px]">POST</span>
-                  <span className="text-slate-200">/api/v1/entities</span>
-                </div>
-                <span className="text-slate-500 text-[10px]">Create entity record</span>
-              </div>
-              <div className="bg-[#08080a] p-3 border border-[#222] flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <span className="bg-rose-500/20 text-rose-400 px-2 py-0.5 font-bold text-[10px]">DELETE</span>
-                  <span className="text-slate-200">/api/v1/entities/:id</span>
-                </div>
-                <span className="text-slate-500 text-[10px]">Remove entity record</span>
-              </div>
-              <div className="bg-[#08080a] p-3 border border-[#222] flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <span className="bg-purple-500/20 text-purple-400 px-2 py-0.5 font-bold text-[10px]">GET</span>
-                  <span className="text-slate-200">/api/health</span>
-                </div>
-                <span className="text-slate-500 text-[10px]">Container health probe</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ARCHITECTURE TAB */}
-        {activeTab === 'architecture' && (
-          <div className="bg-[#121215] border border-[#222222] p-6 rounded-xl space-y-4">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-white">Full-Stack Multi-File Architecture</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono">
-              <div className="bg-[#08080a] p-4 border border-[#222] space-y-2">
-                <div className="text-violet-400 font-bold uppercase text-[10px]">Frontend Stack</div>
-                <ul className="text-slate-400 space-y-1">
-                  <li>• React 19 + TypeScript</li>
-                  <li>• Tailwind CSS utility classes</li>
-                  <li>• Lucide React Icons</li>
-                  <li>• API client service layer (\`src/lib/api.ts\`)</li>
-                </ul>
-              </div>
-              <div className="bg-[#08080a] p-4 border border-[#222] space-y-2">
-                <div className="text-emerald-400 font-bold uppercase text-[10px]">Backend & Database</div>
-                <ul className="text-slate-400 space-y-1">
-                  <li>• Express.js REST API (\`server/server.ts\`)</li>
-                  <li>• Relational SQL Schema (\`server/schema.sql\`)</li>
-                  <li>• In-memory & persistence store (\`server/db.ts\`)</li>
-                  <li>• Multi-stage Dockerfile on Port 3000</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-[#222222] bg-[#050505] px-6 py-3 flex items-center justify-between text-[10px] font-mono text-slate-500">
-        <div className="flex items-center space-x-2">
-          <Server className="w-3 h-3 text-violet-400" />
-          <span>${appTitle} • Deployed on Port 3000</span>
-        </div>
-        <div className="flex items-center space-x-2 text-emerald-400">
-          <CheckCircle2 className="w-3 h-3" />
-          <span>Multi-Agent Swarm Certified</span>
-        </div>
-      </footer>
-    </div>
-  );
-}
-`
-            },
-            {
-              path: 'src/components/Header.tsx',
-              content: `import React from 'react';
-import { Layers, ShieldCheck, Activity, Terminal, Database, Code } from 'lucide-react';
-
-interface HeaderProps {
-  activeTab: string;
-  setActiveTab: (tab: any) => void;
-  appName: string;
-}
-
-export default function Header({ activeTab, setActiveTab, appName }: HeaderProps) {
-  return (
-    <header className="bg-[#050505] border-b border-[#222222] px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
-      {/* Brand & Title */}
-      <div className="flex items-center space-x-3">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center font-black text-white text-sm shadow">
-          {appName.charAt(0)}
-        </div>
-        <div>
-          <div className="font-extrabold text-sm text-white uppercase tracking-wider">{appName}</div>
-          <div className="text-[9px] font-mono text-emerald-400 flex items-center space-x-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
-            <span>FULL-STACK • LIVE</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Navigation Tabs */}
-      <nav className="flex items-center space-x-1 bg-[#111111] p-1 border border-[#222222] text-[10px] font-mono">
-        {[
-          { id: 'dashboard', label: 'Dashboard' },
-          { id: 'records', label: 'Records & CRUD' },
-          { id: 'api', label: 'REST API' },
-          { id: 'architecture', label: 'Architecture' }
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={\`px-3 py-1.5 uppercase font-bold transition \${
-              activeTab === tab.id
-                ? 'bg-white text-black'
-                : 'text-slate-400 hover:text-white'
-            }\`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-    </header>
-  );
-}
-`
-            },
-            {
-              path: 'src/components/Dashboard.tsx',
-              content: `import React from 'react';
-import { AppStats, EntityItem } from '../types';
-import { Activity, Database, Server, ShieldCheck, Zap } from 'lucide-react';
-
-interface DashboardProps {
-  stats: AppStats;
-  entities: EntityItem[];
-}
-
-export default function Dashboard({ stats, entities }: DashboardProps) {
-  return (
-    <div className="space-y-6">
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-[#121215] border border-[#222222] p-4 rounded-xl">
-          <div className="text-[10px] font-mono text-slate-500 uppercase">Total Records</div>
-          <div className="text-2xl font-bold font-mono text-white mt-1">{stats.totalRecords}</div>
-          <div className="text-[9px] text-emerald-400 font-mono mt-1">↑ Active State Hook</div>
-        </div>
-
-        <div className="bg-[#121215] border border-[#222222] p-4 rounded-xl">
-          <div className="text-[10px] font-mono text-slate-500 uppercase">Active Users</div>
-          <div className="text-2xl font-bold font-mono text-violet-400 mt-1">{stats.activeUsers}</div>
-          <div className="text-[9px] text-violet-400 font-mono mt-1">Session Ingress</div>
-        </div>
-
-        <div className="bg-[#121215] border border-[#222222] p-4 rounded-xl">
-          <div className="text-[10px] font-mono text-slate-500 uppercase">Ingress Latency</div>
-          <div className="text-2xl font-bold font-mono text-emerald-400 mt-1">{stats.latencyMs} ms</div>
-          <div className="text-[9px] text-slate-400 font-mono mt-1">Node.js Express Bridge</div>
-        </div>
-
-        <div className="bg-[#121215] border border-[#222222] p-4 rounded-xl">
-          <div className="text-[10px] font-mono text-slate-500 uppercase">SLA Uptime</div>
-          <div className="text-2xl font-bold font-mono text-cyan-400 mt-1">{stats.uptime}</div>
-          <div className="text-[9px] text-cyan-400 font-mono mt-1">Health Daemon Online</div>
-        </div>
-      </div>
-
-      {/* Quick Activity Stream */}
-      <div className="bg-[#121215] border border-[#222222] p-5 rounded-xl space-y-3">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-white">System Activity Logs</h3>
-        <div className="space-y-2 text-xs font-mono">
-          <div className="bg-[#08080a] p-2.5 border border-[#222] flex items-center justify-between text-slate-300">
-            <span>[Express Engine] Router initialized on port 3000.</span>
-            <span className="text-emerald-400 text-[10px]">OK</span>
-          </div>
-          <div className="bg-[#08080a] p-2.5 border border-[#222] flex items-center justify-between text-slate-300">
-            <span>[SQL Driver] Table 'entities' synced and indexes verified.</span>
-            <span className="text-emerald-400 text-[10px]">SYNCED</span>
-          </div>
-          <div className="bg-[#08080a] p-2.5 border border-[#222] flex items-center justify-between text-slate-300">
-            <span>[Security Audit] 0 OWASP vulnerabilities detected.</span>
-            <span className="text-violet-400 text-[10px]">CERTIFIED</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-`
-            },
-            {
-              path: 'src/types.ts',
-              content: `export interface EntityItem {
-  id: string;
-  title: string;
-  category: string;
-  status: 'active' | 'archived' | 'pending';
-  createdAt?: string;
-}
-
-export interface AppStats {
-  totalRecords: number;
-  activeUsers: number;
-  uptime: string;
-  latencyMs: number;
-}
-`
-            },
-            {
-              path: 'src/lib/api.ts',
-              content: `import { EntityItem } from '../types';
-
-let localStore: EntityItem[] = [
-  { id: 'ent_1', title: 'User Authentication & Sessions', category: 'Security Policy', status: 'active' },
-  { id: 'ent_2', title: 'Data Schema Contract Sync', category: 'Core Engine', status: 'active' },
-  { id: 'ent_3', title: 'Interactive Analytics Dashboard', category: 'UI Component', status: 'active' }
-];
-
-export async function fetchEntities(): Promise<EntityItem[]> {
   try {
-    const res = await fetch('/api/v1/entities');
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (e) {}
-  return localStore;
-}
-
-export async function createEntity(data: Omit<EntityItem, 'id'>): Promise<EntityItem> {
-  const newEntity: EntityItem = {
-    ...data,
-    id: \`ent_\${Date.now()}_\${Math.random().toString(36).substring(2, 6)}\`,
-    createdAt: new Date().toISOString()
-  };
-  try {
-    const res = await fetch('/api/v1/entities', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newEntity)
+    const run = await orchestratorEngine.startExecutionRun(initialProject, {
+      triggeredBy: 'create',
+      preApprovedCriticalTools:
+        preApprovedCriticalTools !== undefined ? Boolean(preApprovedCriticalTools) : undefined,
+      requireApprovalForCriticalWrites: Boolean(requireApprovalForCriticalWrites),
     });
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (e) {}
-  localStore.unshift(newEntity);
-  return newEntity;
-}
 
-export async function deleteEntity(id: string): Promise<void> {
-  try {
-    await fetch(\`/api/v1/entities/\${id}\`, { method: 'DELETE' });
-  } catch (e) {}
-  localStore = localStore.filter(e => e.id !== id);
-}
-
-export async function getSystemHealth() {
-  return { status: 'healthy', latencyMs: 12, port: 3000 };
-}
-`
-            },
-            {
-              path: 'server/server.ts',
-              content: `import express from 'express';
-import cors from 'cors';
-import { dbRepository } from './db';
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(cors());
-app.use(express.json());
-
-// 1. Health Probe
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
-});
-
-// 2. GET all entities
-app.get('/api/v1/entities', (req, res) => {
-  const records = dbRepository.getAll();
-  res.json(records);
-});
-
-// 3. POST new entity
-app.post('/api/v1/entities', (req, res) => {
-  const { title, category, status } = req.body;
-  if (!title) return res.status(400).json({ error: 'Title is required' });
-  const created = dbRepository.create({ title, category: category || 'General', status: status || 'active' });
-  res.status(201).json(created);
-});
-
-// 4. DELETE entity
-app.delete('/api/v1/entities/:id', (req, res) => {
-  const deleted = dbRepository.delete(req.params.id);
-  res.json({ success: deleted });
-});
-
-app.listen(PORT, () => {
-  console.log(\`[Backend Server] Running on port \${PORT}\`);
-});
-`
-            },
-            {
-              path: 'server/schema.sql',
-              content: `-- Relational Schema Definition for ${appTitle}
-
-CREATE TABLE IF NOT EXISTS entities (
-  id VARCHAR(64) PRIMARY KEY,
-  title VARCHAR(255) NOT NULL,
-  category VARCHAR(100) DEFAULT 'General',
-  status VARCHAR(50) DEFAULT 'active',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_entities_category ON entities(category);
-CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
-`
-            },
-            {
-              path: 'server/db.ts',
-              content: `// In-Memory & Relational Database Layer
-
-interface EntityRecord {
-  id: string;
-  title: string;
-  category: string;
-  status: 'active' | 'archived' | 'pending';
-  createdAt: string;
-}
-
-const store: EntityRecord[] = [
-  { id: 'ent_1', title: 'User Authentication & Sessions', category: 'Security Policy', status: 'active', createdAt: new Date().toISOString() },
-  { id: 'ent_2', title: 'Data Schema Contract Sync', category: 'Core Engine', status: 'active', createdAt: new Date().toISOString() },
-  { id: 'ent_3', title: 'Interactive Analytics Dashboard', category: 'UI Component', status: 'active', createdAt: new Date().toISOString() }
-];
-
-export const dbRepository = {
-  getAll: () => store,
-  create: (item: { title: string; category: string; status: any }) => {
-    const record: EntityRecord = {
-      id: \`ent_\${Date.now()}_\${Math.random().toString(36).substring(2, 6)}\`,
-      title: item.title,
-      category: item.category,
-      status: item.status,
-      createdAt: new Date().toISOString()
-    };
-    store.unshift(record);
-    return record;
-  },
-  delete: (id: string) => {
-    const idx = store.findIndex(e => e.id === id);
-    if (idx !== -1) {
-      store.splice(idx, 1);
-      return true;
-    }
-    return false;
+    const latestProject = executionStore.getProject(projectId) || initialProject;
+    return res.json({
+      ...latestProject,
+      activeRunId: run.runId,
+      lastExecutionRun: run,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: 'Failed to start multi-agent orchestration run',
+      message: redactSecrets(err?.message || 'Unknown orchestration error'),
+    });
   }
-};
-`
-            },
-            {
-              path: 'package.json',
-              content: `{\n  "name": "${cleanAppName}",\n  "version": "1.0.0",\n  "private": true,\n  "type": "module",\n  "scripts": {\n    "dev": "vite",\n    "build": "vite build",\n    "server": "tsx server/server.ts"\n  },\n  "dependencies": {\n    "react": "^19.0.0",\n    "react-dom": "^19.0.0",\n    "lucide-react": "^0.460.0",\n    "express": "^4.21.0",\n    "cors": "^2.8.5"\n  }\n}`
-            },
-            {
-              path: 'README.md',
-              content: `# ${appTitle}\n\nAutonomous full-stack application synthesized by DevForge AI Multi-Model Swarm.\n\n## Quick Start\n\`\`\`bash\nnpm install\nnpm run dev\n\`\`\`\n\n## Backend Server\n\`\`\`bash\nnpm run server\n\`\`\`\n`
-            },
-            {
-              path: 'Dockerfile',
-              content: `# Multi-stage Production Container\nFROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nRUN npm run build\n\nFROM node:20-alpine AS runner\nWORKDIR /app\nCOPY --from=builder /app/dist ./dist\nCOPY --from=builder /app/node_modules ./node_modules\nCOPY --from=builder /app/package.json ./package.json\nEXPOSE 3000\nCMD ["npm", "run", "server"]\n`
-            },
-            {
-              path: 'docker-compose.yml',
-              content: `version: '3.8'\nservices:\n  web:\n    build: .\n    ports:\n      - "3000:3000"\n    environment:\n      - NODE_ENV=production\n`
-            },
-            {
-              path: 'tests/app.test.ts',
-              content: `import { describe, it, expect } from 'vitest';\n\ndescribe('${appTitle} Test Suite', () => {\n  it('should initialize successfully', () => {\n    expect(true).toBe(true);\n  });\n\n  it('should have health check contract', () => {\n    const endpoint = '/api/health';\n    expect(endpoint).toBeDefined();\n  });\n});\n`
-            }
-          ]
-        };
-      }
-
-      // 3. CEO Validation of PRD
-      pushLog('Aria CEO', '[CEO Validation] Audited PRD specifications and acceptance matrix against prompt intent -> PRD APPROVED.', 'success');
-      await new Promise(r => setTimeout(r, 800));
-
-      // 4. CEO Assigns Milestone 2 to Senior Architect Sophia
-      const targetProj = db.projects.find(p => p.id === projectId);
-      pushLog('Aria CEO', '[CEO Directive] Assigning Milestone 2 (System Architecture & Schema Design) to Senior Architect Sophia Lead.', 'info');
-      if (targetProj) {
-        const archAg = targetProj.agents.find(a => a.id === 'ag_arch');
-        if (archAg) {
-          archAg.status = 'active';
-          archAg.assignedPrompt = buildAgentPrompt('sophia', fullPrompt, 'Design topology, schema, interfaces, and REST specifications.', projectClassification);
-          archAg.modelUsed = `OpenRouter (${AGENT_ROSTER.sophia.defaultModel})`;
-          archAg.generatedArtifact = 'architecture.md & server/schema.sql';
-        }
-      }
-      pushLog('Sophia Lead', 'Instructing subagents (Data Schema Modeler & API Contract Validator) to design schema interfaces...', 'info');
-      await new Promise(r => setTimeout(r, 1000));
-      pushLog('Sophia Lead', 'Schema contracts validated. Architecture submitted to CEO Aria.', 'success');
-
-      // 5. CEO Validation of Architecture
-      pushLog('Aria CEO', '[CEO Validation] System Architecture & REST contracts certified -> ARCHITECTURE APPROVED.', 'success');
-      await new Promise(r => setTimeout(r, 800));
-
-      // 6. CEO Assigns Milestone 3 to Senior Frontend Frank
-      pushLog('Aria CEO', '[CEO Directive] Assigning Milestone 3 (React + Tailwind UI Synthesis) to Senior Frontend Frank Lead.', 'info');
-      if (targetProj) {
-        const feAg = targetProj.agents.find(a => a.id === 'ag_fe');
-        if (feAg) {
-          feAg.status = 'active';
-          feAg.assignedPrompt = buildAgentPrompt('frank', fullPrompt, 'Synthesize type-appropriate UI/components against Sophia’s contracts.', projectClassification);
-          feAg.modelUsed = `NVIDIA NIM (${AGENT_ROSTER.frank.defaultModel})`;
-          feAg.generatedArtifact = 'React 19 Component Tree & Tailwind UI';
-        }
-      }
-      pushLog('Frank Lead', 'Instructing subagent Component Tree Builder (running NVIDIA LLaMA 3.1 70B)...', 'info');
-      await new Promise(r => setTimeout(r, 1000));
-
-      // 7. The source artifact is checked in the final gate; do not invent
-      // subagent defects or claim a repair that did not happen.
-      pushLog('Frank Lead', 'Component boundaries prepared for artifact validation.', 'info');
-      await new Promise(r => setTimeout(r, 700));
-
-      // 8. CEO validation is only recorded after the artifact is installed.
-      pushLog('Aria CEO', '[CEO Validation] Source artifact queued for static and test-quality validation.', 'info');
-      await new Promise(r => setTimeout(r, 800));
-
-      // Update project files in DB
-      const targetProject = db.projects.find(p => p.id === projectId);
-      if (targetProject) {
-        targetProject.name = generatedData.name;
-        targetProject.description = generatedData.description;
-        targetProject.status = 'coding';
-        targetProject.files = [
-          { path: 'docs/PRD.md', name: 'PRD.md', type: 'file', content: generatedData.prd },
-          { path: 'docs/ARCHITECTURE.md', name: 'ARCHITECTURE.md', type: 'file', content: generatedData.architecture },
-          ...generatedData.files.map((f: any) => ({
-            path: f.path,
-            name: f.path.split('/').pop() || f.path,
-            type: 'file',
-            content: f.content
-          }))
-        ];
-      }
-
-      // 9. CEO Assigns Milestone 4 to Senior QA Quinn
-      pushLog('Aria CEO', '[CEO Directive] Assigning Milestone 4 (QA & Security Verification) to Senior QA Lead Quinn.', 'info');
-      writeSwarmState(projectId);
-      if (targetProject) {
-        const qaAg = targetProject.agents.find(a => a.id === 'ag_qa');
-        if (qaAg) {
-          qaAg.status = 'active';
-          qaAg.assignedPrompt = buildAgentPrompt('quinn', fullPrompt, 'Write and run type-appropriate tests against actual deliverables.', projectClassification);
-          qaAg.modelUsed = `Groq (${AGENT_ROSTER.quinn.defaultModel})`;
-          qaAg.generatedArtifact = 'tests/app.test.ts (Comprehensive Quality & Security Suite)';
-        }
-      }
-      pushLog('Quinn Lead', 'Formulating comprehensive test suite (Health, Auth, Data Mutation, Transaction Engine) via Groq LLaMA 3.3 70B...', 'info');
-      await new Promise(r => setTimeout(r, 1100));
-
-      // Formulate robust test content covering all critical paths
-      const quinnTestContent = `import { describe, it, expect, beforeEach } from 'vitest';
-
-describe('${appTitle} - Complete Test & Quality Suite', () => {
-  beforeEach(() => {
-    // Reset test harness state
-  });
-
-  describe('Health & Ingress Contract', () => {
-    it('verifies /api/health endpoint returns status ok and latency timestamp', () => {
-      const response = { status: 'ok', uptime: 142.8, timestamp: new Date().toISOString() };
-      expect(response.status).toBe('ok');
-      expect(response.uptime).toBeGreaterThan(0);
-      expect(response.timestamp).toBeDefined();
-    });
-  });
-
-  describe('Authentication & Session Security Flow', () => {
-    it('rejects unauthorized requests with 401 when token is missing', () => {
-      const headers: Record<string, string> = {};
-      const isAuthenticated = Boolean(headers['authorization']);
-      expect(isAuthenticated).toBe(false);
-    });
-
-    it('authenticates valid session bearer token and extracts tenant identity', () => {
-      const headers = { authorization: 'Bearer test-session-token-xyz' };
-      const token = headers.authorization.replace('Bearer ', '');
-      expect(token).toBe('test-session-token-xyz');
-      expect(token.length).toBeGreaterThan(10);
-    });
-  });
-
-  describe('Data Mutation Endpoints (POST / PUT / DELETE)', () => {
-    it('creates new entity with valid payload and assigns uuid', () => {
-      const payload = { title: 'Test Item', category: 'Production', status: 'active' };
-      const generatedId = 'rec_' + Math.random().toString(36).substring(2, 9);
-      const createdRecord = { id: generatedId, ...payload, createdAt: new Date().toISOString() };
-
-      expect(createdRecord.id).toMatch(/^rec_/);
-      expect(createdRecord.title).toBe('Test Item');
-      expect(createdRecord.status).toBe('active');
-    });
-
-    it('validates mutation payload integrity and rejects missing required attributes', () => {
-      const invalidPayload = { category: 'Incomplete' } as any;
-      const isValid = Boolean(invalidPayload.title && invalidPayload.category);
-      expect(isValid).toBe(false);
-    });
-
-    it('deletes record by identifier and confirms record removal from state', () => {
-      const records = [{ id: 'rec_1' }, { id: 'rec_2' }];
-      const remaining = records.filter(r => r.id !== 'rec_1');
-      expect(remaining.length).toBe(1);
-      expect(remaining[0].id).toBe('rec_2');
-    });
-  });
-
-  describe('Core Business & Transaction Engine', () => {
-    it('executes atomic state transitions and calculates balanced totals', () => {
-      const initialBalance = 1000;
-      const transactionAmount = 150;
-      const fee = transactionAmount * 0.015;
-      const finalBalance = initialBalance - (transactionAmount + fee);
-
-      expect(finalBalance).toBe(847.75);
-      expect(finalBalance).toBeLessThan(initialBalance);
-    });
-  });
-});
-`;
-
-      if (targetProject) {
-        const existingTestIdx = targetProject.files.findIndex(f => f.path.includes('test'));
-        if (existingTestIdx >= 0) {
-          targetProject.files[existingTestIdx].content = quinnTestContent;
-        } else {
-          targetProject.files.push({
-            path: 'tests/app.test.ts',
-            name: 'app.test.ts',
-            type: 'file',
-            content: quinnTestContent
-          });
-        }
-      }
-
-      pushLog('Quinn Lead', 'Test suite generated with 8 assertion suites. 0 security alerts found.', 'success');
-      writeSwarmState(projectId);
-
-      // 10. CEO Assigns Milestone 5 to Senior DevOps Devon
-      pushLog('Aria CEO', '[CEO Directive] Assigning Milestone 5 (Docker Containerization & Ingress) to Senior DevOps Lead Devon.', 'info');
-      writeSwarmState(projectId);
-      if (targetProject) {
-        const sreAg = targetProject.agents.find(a => a.id === 'ag_sre');
-        if (sreAg) {
-          sreAg.status = 'active';
-          sreAg.assignedPrompt = buildAgentPrompt('devon', fullPrompt, 'Synthesize type-appropriate deployment configuration and bounded health recovery.', projectClassification);
-          sreAg.modelUsed = `Groq (${AGENT_ROSTER.devon.defaultModel})`;
-          sreAg.generatedArtifact = 'Dockerfile & docker-compose.yml (Port 3000 mapped)';
-        }
-      }
-      pushLog('Devon Lead', 'Instructing subagent Docker Container Builder (running Groq Mixtral 8x7B)...', 'info');
-      await new Promise(r => setTimeout(r, 1000));
-      pushLog('Devon Lead', 'Container built. Port 3000 ingress verified with automated health daemon.', 'success');
-      writeSwarmState(projectId);
-
-      // ==========================================
-      // FINAL GATE (Aria performs this herself, not a lead)
-      // ==========================================
-      pushLog('Aria CEO', '[CEO Final Gate] Initiating Executive Audit Gate. Performing Step 1 (run_ast_audit) across all project files...', 'info');
-      writeSwarmState(projectId);
-      await new Promise(r => setTimeout(r, 800));
-
-      if (targetProject) {
-        // Step 1: run_ast_audit
-        const astResult = runAstAudit(targetProject);
-        targetProject.astAudit = astResult;
-
-        if (!astResult.passed) {
-          pushLog('Aria CEO', `[CEO Final Gate — AST Audit FAILED] Detected deficiencies: ${astResult.errors.join('; ')}`, 'error');
-          targetProject.selfHealingAttempts = targetProject.selfHealingAttempts || {};
-          targetProject.selfHealingAttempts[5] = (targetProject.selfHealingAttempts[5] || 0) + 1;
-          
-          if (targetProject.selfHealingAttempts[5] <= 3) {
-            pushLog('Aria CEO', `[CEO Self-Healing Intervention] Attempt ${targetProject.selfHealingAttempts[5]}/3: Dispatching corrective instructions to Devon Lead...`, 'warning');
-            // Self-healing patch
-            const dockerFile = targetProject.files.find(f => f.path === 'Dockerfile');
-            if (dockerFile && !dockerFile.content.includes('3000')) {
-              dockerFile.content += '\nEXPOSE 3000\n';
-            }
-            pushLog('Devon Lead', '[Self-Healing Success] Corrective patch applied: Port 3000 ingress explicitly configured.', 'success');
-            targetProject.astAudit = runAstAudit(targetProject);
-          } else {
-            pushLog('Aria CEO', '[CEO Final Gate Blocked] 3-attempt self-healing limit reached for AST audit. Deployment certificate withheld.', 'error');
-            targetProject.status = 'failed';
-            writeSwarmState(projectId);
-            return;
-          }
-        }
-
-        pushLog('Aria CEO', `[CEO Final Gate — Step 1 PASSED] Static artifact checks verified: 0 broken references, 0 OWASP alerts${astResult.port3000Configured ? ', server ingress configured.' : ', static-site deployment requires no application port.'}`, 'success');
-        writeSwarmState(projectId);
-        await new Promise(r => setTimeout(r, 800));
-
-        // Step 2b: INDEPENDENT TEST QUALITY AUDIT
-        pushLog('Aria CEO', '[CEO Final Gate — Step 2b] Executing Independent Test Quality Audit via run_coverage_analysis (A green test run is necessary but never sufficient)...', 'info');
-        writeSwarmState(projectId);
-        await new Promise(r => setTimeout(r, 900));
-
-        let coverageAudit = runCoverageAnalysis(targetProject);
-        targetProject.testQualityAudit = coverageAudit;
-
-        if (coverageAudit.verdict !== 'pass') {
-          pushLog('Aria CEO', `[CEO Final Gate — Step 2b REJECTED] Audit verdict: ${coverageAudit.verdict}. Line Coverage: ${coverageAudit.lineCoverage}%, Branch Coverage: ${coverageAudit.branchCoverage}%. Critical gaps: ${coverageAudit.untestedCriticalPaths.join(', ') || coverageAudit.testTheaterFindings.join('; ')}`, 'warning');
-          
-          targetProject.selfHealingAttempts = targetProject.selfHealingAttempts || {};
-          targetProject.selfHealingAttempts[4] = (targetProject.selfHealingAttempts[4] || 0) + 1;
-
-          if (targetProject.selfHealingAttempts[4] <= 3) {
-            const specificGap = coverageAudit.untestedCriticalPaths.length > 0
-              ? `Untested critical paths: ${coverageAudit.untestedCriticalPaths.join(', ')}`
-              : coverageAudit.testTheaterFindings.join('; ');
-
-            pushLog('Aria CEO', `[CEO Self-Healing Intervention] Milestone 4 (ag_qa) attempt ${targetProject.selfHealingAttempts[4]}/3: Re-delegating to Quinn Lead with SPECIFIC gap: "${specificGap}"`, 'warning');
-            await new Promise(r => setTimeout(r, 1000));
-
-            // Quinn heals the test suite
-            const testFileObj = targetProject.files.find(f => f.path.includes('test'));
-            if (testFileObj) {
-              testFileObj.content = quinnTestContent;
-            }
-            pushLog('Quinn Lead', '[Self-Healing Remediation] Synthesized targeted tests covering all critical paths and eliminating test theater patterns.', 'success');
-
-            // Re-run coverage analysis
-            coverageAudit = runCoverageAnalysis(targetProject);
-            targetProject.testQualityAudit = coverageAudit;
-          } else {
-            pushLog('Aria CEO', `[CEO Final Gate Blocked] 3-attempt self-healing limit reached for test quality audit. Untested critical paths remain. Certification blocked.`, 'error');
-            targetProject.status = 'failed';
-            writeSwarmState(projectId);
-            return;
-          }
-        }
-
-        pushLog('Aria CEO', `[CEO Final Gate — Step 2b PASSED] Line Coverage: ${coverageAudit.lineCoverage}% (floor 70%), Branch Coverage: ${coverageAudit.branchCoverage}% (floor 60%), 0 untested critical paths, 0 test theater findings.`, 'success');
-        writeSwarmState(projectId);
-        await new Promise(r => setTimeout(r, 800));
-
-        // Step 4: Grant Deployment Certificate
-        const certHash = 'cert_sha256_' + Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 6);
-        targetProject.deploymentCertificate = {
-          certifiedAt: new Date().toISOString(),
-          certificateHash: certHash,
-          certifiedBy: 'Aria, DevForge CEO Executive Orchestrator (gemini-2.5-pro)',
-          verdict: 'VERIFIED_AND_CERTIFIED'
-        };
-
-        pushLog('Aria CEO', `[CEO Executive Sign-off] Final Gate PASSED. Cryptographic deployment certificate issued: ${certHash}. Live Sandbox deployed!`, 'success');
-        writeSwarmState(projectId);
-
-        const ceoAg = targetProject.agents.find(a => a.id === 'ag_ceo');
-        if (ceoAg) {
-          ceoAg.assignedPrompt = `[Role: Aria CEO Executive Orchestrator (gemini-2.5-pro)]\nExecuted 5 fixed milestones and Final Gate (AST audit + Step 2b Independent Test Quality Audit). Granted live deployment certificate: ${certHash}.`;
-          ceoAg.modelUsed = 'Google Gemini (gemini-2.5-pro)';
-          ceoAg.generatedArtifact = `Executive Deployment Certificate: ${certHash}`;
-        }
-
-        targetProject.status = 'deployed';
-        targetProject.deployedUrl = `https://${cleanAppName}.devforge.ai`;
-        targetProject.agents.forEach(a => {
-          a.status = 'complete';
-          a.validationStatus = 'validated';
-          if (a.subagents) {
-            a.subagents.forEach(sub => {
-              sub.status = 'complete';
-            });
-          }
-        });
-        writeSwarmState(projectId);
-      }
-    } catch (err: any) {
-      console.warn('[Swarm Error Caught - Self Healing]:', err?.message || err);
-      pushLog('Aria CEO', `[Autonomous Self-Healing] Recovering from error: ${err.message || 'unknown'}. Synthesizing full application codebase...`, 'warning');
-      const finalProj = db.projects.find(p => p.id === projectId);
-      if (finalProj) {
-        if (!finalProj.files || finalProj.files.length === 0) {
-          const fallbackArtifact = synthesizeProjectArtifact(fullPrompt, cleanAppName);
-          finalProj.files = [
-            { path: 'docs/PRD.md', name: 'PRD.md', type: 'file', content: fallbackArtifact.prd },
-            { path: 'docs/ARCHITECTURE.md', name: 'ARCHITECTURE.md', type: 'file', content: fallbackArtifact.architecture },
-            ...fallbackArtifact.files
-          ];
-        }
-        finalProj.agents.forEach(a => {
-          a.status = 'complete';
-          a.validationStatus = 'validated';
-          if (a.subagents) {
-            a.subagents.forEach(s => { s.status = 'complete'; });
-          }
-        });
-        finalProj.status = 'deployed';
-        finalProj.deployedUrl = `/preview/${finalProj.id}`;
-        pushLog('Aria CEO', 'Autonomous swarm synthesized all application files and finalized container deployment.', 'success');
-        writeSwarmState(projectId);
-      }
-    }
-  })();
 });
 
 // ==========================================
@@ -1759,9 +529,15 @@ app.get('/api/system/aria-instructions', (req, res) => {
   });
 });
 
+// 1b. Tool Registry & Availability Status
+app.get('/api/system/tools', async (_req, res) => {
+  const tools = await getAllToolsAvailabilityStatus();
+  res.json({ tools });
+});
+
 // 2. Run Coverage Analysis (Final Gate Step 2b: Independent Test Quality Audit)
 app.post('/api/projects/:id/run-coverage-analysis', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) {
     return res.status(404).json({ error: 'Project not found' });
   }
@@ -1770,6 +546,7 @@ app.post('/api/projects/:id/run-coverage-analysis', (req, res) => {
   const auditResult = runCoverageAnalysis(project, targetFiles);
   project.testQualityAudit = auditResult;
   project.updatedAt = new Date().toISOString();
+  executionStore.saveProject(project);
 
   res.json({
     success: true,
@@ -1780,14 +557,16 @@ app.post('/api/projects/:id/run-coverage-analysis', (req, res) => {
 
 // 3. Run AST & Static Integrity Audit (Final Gate Step 1)
 app.post('/api/projects/:id/run-ast-audit', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) {
     return res.status(404).json({ error: 'Project not found' });
   }
 
-  const astResult = runAstAudit(project);
+  const compilerDiagnostics = runTypeScriptAstDiagnostics(project);
+  const astResult = runAstAudit(project, compilerDiagnostics);
   project.astAudit = astResult;
   project.updatedAt = new Date().toISOString();
+  executionStore.saveProject(project);
 
   res.json({
     success: true,
@@ -1798,13 +577,13 @@ app.post('/api/projects/:id/run-ast-audit', (req, res) => {
 
 // 4. Grant Deployment Certificate
 app.post('/api/projects/:id/grant-deployment-certificate', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) {
     return res.status(404).json({ error: 'Project not found' });
   }
 
-  // Final Gate checks
-  const astResult = project.astAudit || runAstAudit(project);
+  const compilerDiagnostics = runTypeScriptAstDiagnostics(project);
+  const astResult = project.astAudit || runAstAudit(project, compilerDiagnostics);
   project.astAudit = astResult;
 
   const coverageResult = project.testQualityAudit || runCoverageAnalysis(project);
@@ -1830,17 +609,20 @@ app.post('/api/projects/:id/grant-deployment-certificate', (req, res) => {
     });
   }
 
-  const verificationHash = req.body?.verification_hash || ('cert_sha256_' + Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 6));
+  const verificationHash =
+    req.body?.verification_hash ||
+    `cert_sha256_${crypto.createHash('sha256').update(`${project.id}:${Date.now()}`).digest('hex').slice(0, 14)}`;
   project.deploymentCertificate = {
     certifiedAt: new Date().toISOString(),
     certificateHash: verificationHash,
-    certifiedBy: 'Aria, DevForge CEO Executive Orchestrator (gemini-2.5-pro)',
+    certifiedBy: 'Aria, DevForge CEO Executive Orchestrator',
     verdict: 'VERIFIED_AND_CERTIFIED'
   };
 
   project.status = 'deployed';
-  project.deployedUrl = `https://${project.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}.devforge.ai`;
+  project.deployedUrl = `/preview/${project.id}`;
   project.updatedAt = new Date().toISOString();
+  executionStore.saveProject(project);
 
   res.json({
     success: true,
@@ -1849,10 +631,10 @@ app.post('/api/projects/:id/grant-deployment-certificate', (req, res) => {
   });
 });
 
-// 5. Delegate Milestone with 12s Abort Timeout & 1-attempt Fallback
+// 5. Delegate Milestone with fallback
 app.post('/api/projects/:id/delegate-milestone', async (req, res) => {
   const { milestone, lead_id, prompt: leadPrompt } = req.body;
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) {
     return res.status(404).json({ error: 'Project not found' });
   }
@@ -1873,113 +655,148 @@ app.post('/api/projects/:id/delegate-milestone', async (req, res) => {
   }
 });
 
-// Interactive On-Demand Cross-Agent Self-Healing Simulation API
+// 6. Real Self-Healing Trigger (Runs real AST + Coverage Diagnostics & Remediates)
 app.post('/api/projects/:id/trigger-healing', async (req, res) => {
-  let project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) {
-    project = {
-      id: req.params.id,
-      name: 'DevForge Project',
-      description: 'Autonomous Software Engineering Project',
-      prompt: 'Synthesize full-stack web application',
-      status: 'coding',
-      files: [],
-      createdAt: new Date().toISOString(),
-      aiCreditsUsed: 4200,
-      modelConfig: {},
-      agents: [
-        {
-          id: 'agent_ceo',
-          name: 'Aria CEO',
-          role: 'CEO Orchestrator',
-          tier: 'ceo',
-          provider: 'gemini',
-          status: 'complete',
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-          model: 'Gemini 2.5 Pro',
-          outputLogs: []
-        },
-        {
-          id: 'agent_frank',
-          name: 'Frank Lead',
-          role: 'React Synthesizer Lead',
-          tier: 'senior',
-          provider: 'nvidia',
-          status: 'complete',
-          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-          model: 'LLaMA 3.1 70B',
-          outputLogs: [],
-          subagents: [
-            {
-              id: 'sub_frank_1',
-              name: 'UI Element Pod',
-              role: 'Component Engine',
-              task: 'React JSX verification',
-              status: 'complete',
-              instructionsReceived: []
-            }
-          ]
-        }
-      ]
-    } as any;
-    db.projects.push(project);
+    return res.status(404).json({ error: 'Project not found' });
   }
 
-  const targetAgent = project.agents.find(a => a.tier === 'senior' && a.subagents && a.subagents.length > 0) || project.agents[project.agents.length - 1];
-  let targetSub = targetAgent?.subagents?.[0];
-  if (!targetSub && targetAgent) {
-    targetAgent.subagents = [
-      {
-        id: `sub_${targetAgent.id}_1`,
-        name: 'Component Engine Pod',
-        role: 'Synthesizer Subagent',
-        task: 'JSX DOM State Verification',
-        status: 'complete',
-        instructionsReceived: []
-      }
-    ];
-    targetSub = targetAgent.subagents[0];
+  try {
+    const result = await orchestratorEngine.runSelfHealing(req.params.id, req.body?.diagnosticHint);
+    const updated = executionStore.getProject(req.params.id) || project;
+    res.json({
+      success: true,
+      healed: result.healed,
+      message: result.message,
+      run: result.run,
+      project: updated
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: redactSecrets(err?.message || 'Self-healing failed') });
+  }
+});
+
+// 7. Rebuild Project Swarm Execution
+app.post('/api/projects/:id/rebuild', async (req, res) => {
+  const project = findOrHydrateProject(req.params.id);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
   }
 
-  // 1. Simulate failure
-  targetSub.status = 'failed';
-  targetAgent.status = 'healing';
-  targetAgent.validationStatus = 'rejection_healing';
-
-  const ceoAgent = project.agents.find(a => a.tier === 'ceo') || project.agents[0];
-  const streamLogs = activeSreStreams[project.id] || [];
-
-  const timeStr = new Date().toLocaleTimeString();
-  const alertMsg = `[Subagent Alert] ${targetSub.name} encountered an unexpected boundary error during execution.`;
-  streamLogs.push({ timestamp: timeStr, agent: targetAgent.role, message: alertMsg, type: 'warning' });
-  targetAgent.outputLogs.push({ timestamp: timeStr, message: alertMsg, type: 'warning' });
-
-  // 2. CEO steps in with diagnostic instructions
-  const ceoMsg = `[CEO Self-Healing Directive] Intercepted failure in ${targetSub.name}. Root-cause: state divergence. Instructing Senior Lead ${targetAgent.name} to dispatch corrective patch.`;
-  streamLogs.push({ timestamp: timeStr, agent: ceoAgent.role, message: ceoMsg, type: 'warning' });
-  ceoAgent.outputLogs.push({ timestamp: timeStr, message: ceoMsg, type: 'warning' });
-
-  // 3. Senior Lead provides instructions
-  const leadMsg = `[Senior Lead Guidance] Instructing ${targetSub.name}: Apply defensive error boundary, re-hydrate state with fallback values, and re-run assertion.`;
-  targetSub.instructionsReceived.push(`Remediation: Apply defensive fallback and verify state purity.`);
-  targetSub.status = 'healing';
-  streamLogs.push({ timestamp: timeStr, agent: targetAgent.role, message: leadMsg, type: 'info' });
-  targetAgent.outputLogs.push({ timestamp: timeStr, message: leadMsg, type: 'info' });
-
-  // 4. Subagent heals
-  targetSub.status = 'complete';
-  targetSub.healingSummary = `Auto-healed by CEO directive & ${targetAgent.name} guidance at ${timeStr}.`;
-  targetAgent.status = 'complete';
-  targetAgent.validationStatus = 'validated';
-  
-  const successMsg = `[Self-Healing Success] ${targetSub.name} self-healed successfully. Re-validated by CEO Aria -> 100% OPERATIONAL.`;
-  streamLogs.push({ timestamp: timeStr, agent: ceoAgent.role, message: successMsg, type: 'success' });
-  targetAgent.outputLogs.push({ timestamp: timeStr, message: successMsg, type: 'success' });
+  const run = await orchestratorEngine.startExecutionRun(project, {
+    triggeredBy: 'rebuild',
+    requireApprovalForCriticalWrites: Boolean(req.body?.requireApprovalForCriticalWrites),
+  });
 
   res.json({
     success: true,
-    message: 'Self-healing workflow executed and validated successfully',
-    project
+    runId: run.runId,
+    run,
+    project: executionStore.getProject(project.id) || project,
+  });
+});
+
+// 8. Cancel Active Execution Run
+app.post('/api/projects/:id/cancel', (req, res) => {
+  const project = findOrHydrateProject(req.params.id);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  const result = orchestratorEngine.cancelRun(req.params.id, req.body?.reason || 'Cancelled by user');
+  res.json({
+    success: true,
+    ...result,
+    project: executionStore.getProject(req.params.id) || project,
+  });
+});
+
+// 9. Resolve Human Approval Gate
+app.post('/api/projects/:id/approvals/:approvalId/resolve', (req, res) => {
+  const { decision, resolvedBy, note } = req.body || {};
+  if (decision !== 'approve' && decision !== 'reject') {
+    return res.status(400).json({ error: 'decision must be "approve" or "reject"' });
+  }
+  const updated = orchestratorEngine.resolveApproval(
+    req.params.id,
+    req.params.approvalId,
+    decision,
+    resolvedBy || 'workspace-operator',
+    note
+  );
+  if (!updated) {
+    return res.status(404).json({ error: 'Approval request not found' });
+  }
+  res.json({ success: true, approval: updated });
+});
+
+// 10. Full Execution Run Inspection Endpoint
+app.get('/api/projects/:id/execution', (req, res) => {
+  const project = findOrHydrateProject(req.params.id);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  const run = executionStore.getLatestRunForProject(req.params.id) || project.lastExecutionRun || null;
+  const runs = executionStore.getRunsForProject(req.params.id);
+  const events = executionStore.getEvents(req.params.id, Number(req.query.sinceSeq || 0));
+  const pendingApprovals = (run?.approvals || []).filter((a) => a.status === 'pending');
+
+  res.json({
+    project,
+    run,
+    runsCount: runs.length,
+    events,
+    pendingApprovals,
+  });
+});
+
+// 11. Project Tool Invocations & Registry Availability
+app.get('/api/projects/:id/tools', async (req, res) => {
+  const project = findOrHydrateProject(req.params.id);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  const run = executionStore.getLatestRunForProject(req.params.id);
+  const toolsStatus = await getAllToolsAvailabilityStatus();
+  const executions = run?.toolExecutions || [];
+  res.json({
+    projectId: req.params.id,
+    runId: run?.runId || null,
+    total: executions.length,
+    toolExecutions: executions,
+    toolsStatus,
+  });
+});
+
+// 12. Real-Time Ordered SSE Stream (supports Last-Event-ID / ?sinceSeq= replay)
+app.get('/api/projects/:id/events', (req, res) => {
+  const projectId = req.params.id;
+  const headerSeq = req.headers['last-event-id'] ? Number(req.headers['last-event-id']) : undefined;
+  const querySeq = req.query.sinceSeq !== undefined ? Number(req.query.sinceSeq) : undefined;
+  const sinceSeq = Number.isFinite(querySeq) ? querySeq! : Number.isFinite(headerSeq) ? headerSeq! : 0;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof (res as any).flushHeaders === 'function') {
+    (res as any).flushHeaders();
+  }
+
+  const sendSse = (event: any) => {
+    res.write(`id: ${event.seq}\n`);
+    res.write(`event: ${event.type}\n`);
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  const unsubscribe = eventBus.subscribe(projectId, sendSse, sinceSeq);
+  const heartbeat = setInterval(() => {
+    res.write(`: heartbeat ${Date.now()}\n\n`);
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
   });
 });
 
@@ -1996,44 +813,45 @@ app.get('/api/system/providers', (req, res) => {
   });
 });
 
-// 3. SRE Stream logs Endpoint (Polling API)
+// 3. SRE Stream logs Endpoint (Backward-compatible Polling API backed by EventBus)
 app.get('/api/projects/:id/stream', (req, res) => {
-  const logs = activeSreStreams[req.params.id] || [];
-  res.json({ logs });
+  const events = executionStore.getEvents(req.params.id, 0);
+  const eventLogs = events
+    .map((evt) => eventBus.formatStreamLog(evt))
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const legacyLogs = activeSreStreams[req.params.id] || [];
+  res.json({ logs: eventLogs.length > 0 ? eventLogs : legacyLogs });
 });
 
-// Single Project details retrieval (for Standalone Preview & direct links)
-app.get('/api/projects/:id', (req, res) => {
-  const project = db.projects.find(p => p.id === req.params.id);
-  if (project) {
-    return res.json(project);
-  }
-  // Return 404 so client maintains its local / Firestore state and does not overwrite active generation
-  return res.status(404).json({ error: 'Project not found in server memory', id: req.params.id });
-});
-
-// Project sync endpoint to ensure server in-memory db holds the active project
+// Project sync endpoint to ensure durable execution store holds the active project
 app.post('/api/projects/sync', (req, res) => {
   const project = req.body;
   if (!project || !project.id) {
     return res.status(400).json({ error: 'Valid project object with id is required' });
   }
   const existingIdx = db.projects.findIndex(p => p.id === project.id);
+  const updatedProj = existingIdx >= 0
+    ? { ...db.projects[existingIdx], ...project, updatedAt: new Date().toISOString() }
+    : { ...project, updatedAt: new Date().toISOString() };
+
   if (existingIdx >= 0) {
-    db.projects[existingIdx] = { ...db.projects[existingIdx], ...project, updatedAt: new Date().toISOString() };
+    db.projects[existingIdx] = updatedProj;
   } else {
-    db.projects.push({ ...project, updatedAt: new Date().toISOString() });
+    db.projects.push(updatedProj);
   }
-  return res.json({ success: true, project });
+  executionStore.saveProject(updatedProj);
+  return res.json({ success: true, project: updatedProj });
 });
 
 // PUT file editing to update entire file list (aligns with App.tsx)
 app.put('/api/projects/:id/files', (req, res) => {
   const { files } = req.body;
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   if (files && Array.isArray(files)) {
     project.files = files;
+    project.updatedAt = new Date().toISOString();
+    executionStore.saveProject(project);
     res.json({ success: true, message: 'Files updated successfully' });
   } else {
     res.status(400).json({ error: 'Files array is required' });
@@ -2043,21 +861,24 @@ app.put('/api/projects/:id/files', (req, res) => {
 // 4. File Editing inside Sandbox
 app.post('/api/projects/:id/files', (req, res) => {
   const { path: filePath, content } = req.body;
-  const project = db.projects.find(p => p.id === req.params.id);
+  const project = findOrHydrateProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const file = project.files.find(f => f.path === filePath);
+  const file = project.files.find((f: any) => f.path === filePath);
   if (file) {
     file.content = content;
+    project.updatedAt = new Date().toISOString();
+    executionStore.saveProject(project);
     res.json({ success: true, message: 'File saved successfully' });
   } else {
-    // Create new file
     project.files.push({
       path: filePath,
       name: filePath.split('/').pop() || filePath,
       type: 'file',
       content
     });
+    project.updatedAt = new Date().toISOString();
+    executionStore.saveProject(project);
     res.json({ success: true, message: 'New file created inside sandbox' });
   }
 });
@@ -3353,9 +2174,9 @@ app.post('/api/templates', async (req, res) => {
 
 
 // Dev Server setup (Vite integration)
-async function startServer() {
+async function startServer(portOverride?: number) {
   try {
-    if (process.env.NODE_ENV !== 'production') {
+    if (process.env.NODE_ENV !== 'production' && !process.env.VITEST) {
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: 'spa',
@@ -3396,7 +2217,7 @@ async function startServer() {
           next(e);
         }
       });
-    } else {
+    } else if (process.env.NODE_ENV === 'production') {
       const distPath = path.join(process.cwd(), 'dist');
       app.use(express.static(distPath));
       app.get('*', (req, res) => {
@@ -3404,20 +2225,28 @@ async function startServer() {
       });
     }
 
-    const server = app.listen(PORT, '0.0.0.0', () => {
-      console.log(`[DevForge DevServer] Ready and listening on http://0.0.0.0:${PORT}`);
+    const listenPort = portOverride ?? PORT;
+    const server = app.listen(listenPort, '0.0.0.0', () => {
+      console.log(`[DevForge DevServer] Ready and listening on http://0.0.0.0:${listenPort}`);
     });
 
     server.on('error', (err: any) => {
       if (err.code === 'EADDRINUSE') {
-        console.error(`[DevForge DevServer] Port ${PORT} already in use. Retrying or waiting...`);
+        console.error(`[DevForge DevServer] Port ${listenPort} already in use. Retrying or waiting...`);
       } else {
         console.error('[DevForge DevServer] Server runtime error:', err);
       }
     });
+    return server;
   } catch (error) {
     console.error('[DevForge DevServer] Startup error:', error);
+    return undefined;
   }
 }
 
-startServer();
+if (!process.env.VITEST && process.env.DEVFORGE_NO_AUTOSTART !== '1') {
+  startServer();
+}
+
+export { app, startServer };
+

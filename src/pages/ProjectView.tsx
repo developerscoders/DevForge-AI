@@ -1,33 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { Project, FileNode, Agent } from '../types';
+import { Project, FileNode, Agent, ExecutionRun, ApprovalRequest } from '../types';
 import {
   Bot,
-  Terminal,
   Code,
   Layout,
   Globe,
   ArrowLeft,
   RefreshCw,
   AlertTriangle,
-  ShieldCheck,
-  PlayCircle,
-  Star,
   Download,
-  Upload,
-  Lock,
-  FileText,
-  Trash2,
   Edit3,
   Check,
   X,
   Database,
-  Layers,
-  Sparkles,
-  ExternalLink,
-  Copy,
   Share2,
-  Github
+  Github,
+  Copy,
+  ExternalLink,
+  Trash2,
+  ShieldAlert,
+  Square,
 } from 'lucide-react';
 import AgentOrchestrationGraph from '../components/AgentOrchestrationGraph';
 import StreamingPanel from '../components/StreamingPanel';
@@ -46,7 +39,6 @@ import {
   updateFirestoreProjectDetails,
   listenToFirestoreProject
 } from '../lib/firestoreService';
-import { executeAutonomousSwarm } from '../lib/swarmRunner';
 
 interface ProjectViewProps {
   projects: Project[];
@@ -59,7 +51,6 @@ interface ProjectViewProps {
 export default function ProjectView({
   projects,
   onUpdateProjectFiles,
-  onTriggerStream,
   onDeleteProject,
   onProjectUpdated
 }: ProjectViewProps) {
@@ -71,6 +62,10 @@ export default function ProjectView({
   const [showDeployModal, setShowDeployModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'swarm' | 'code' | 'visual' | 'preview'>('swarm');
   const [project, setProject] = useState<Project | null>(null);
+  const [executionRun, setExecutionRun] = useState<ExecutionRun | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [isRebuilding, setIsRebuilding] = useState(false);
@@ -95,11 +90,12 @@ export default function ProjectView({
   const [selectedFile, setSelectedFile] = useState<string>('');
   const [fileContent, setFileContent] = useState<string>('');
 
-  // Local simulated live terminal logs
+  // Live orchestrator stream logs
   const [streamLogs, setStreamLogs] = useState<any[]>([]);
   const [swarmProgress, setSwarmProgress] = useState<number>(0);
   const [currentActiveAgent, setCurrentActiveAgent] = useState<Agent | undefined>(undefined);
-  const isSwarmRunningRef = useRef<boolean>(false);
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
+  const lastSeqRef = useRef<number>(0);
   const hasSavedCompleteRef = useRef<boolean>(false);
 
   // 1. Initial Load from Props, Firestore, or Server
@@ -159,37 +155,49 @@ export default function ProjectView({
     };
   }, [id]); // CRITICAL: Only depend on [id] to stop unconstrained re-subscription loops
 
-  // 2. Poll server for live multi-agent swarm synthesis updates
+  // 2. Hydrate from /api/projects/:id/execution and stream real-time SSE events
   const lastSavedStatusRef = useRef<string | null>(null);
 
   const refreshProjectData = async () => {
     if (!id) return;
     try {
-      const res = await fetch(`/api/projects/${id}`);
-      if (res.ok) {
-        const data: Project = await res.json();
+      const execRes = await fetch(`/api/projects/${id}/execution`);
+      if (execRes.ok) {
+        const execData = await execRes.json();
+        const data: Project = execData.project;
+        const run: ExecutionRun | null = execData.run || data.lastExecutionRun || null;
+        const approvals: ApprovalRequest[] = execData.pendingApprovals || [];
+
+        if (run) {
+          setExecutionRun(run);
+          if (run.metrics?.totalTasks > 0) {
+            const pct =
+              run.status === 'completed'
+                ? 100
+                : Math.min(99, Math.max(5, Math.round((run.metrics.completedTasks / run.metrics.totalTasks) * 100)));
+            setSwarmProgress(pct);
+          }
+        }
+        setPendingApprovals(approvals);
+
+        const activeAg = data.agents?.find((a) => a.status === 'active' || a.status === 'thinking') || data.agents?.[0];
+        if (activeAg) setCurrentActiveAgent(activeAg);
+
         setProject((prev) => {
           if (!prev) return data;
-          // Protect active client-side generation from being clobbered by stale server state
-          if (isSwarmRunningRef.current && data.status === 'deployed' && (!data.files || data.files.length < 3)) {
-            return prev;
-          }
-          const prevAgentsStr = JSON.stringify(prev.agents?.map(a => [a.id, a.status, a.currentTask, a.subagents?.map(s => [s.id, s.status])]));
-          const newAgentsStr = JSON.stringify(data.agents?.map(a => [a.id, a.status, a.currentTask, a.subagents?.map(s => [s.id, s.status])]));
-          if (
-            prev.status === data.status &&
-            prev.files?.length === data.files?.length &&
-            prevAgentsStr === newAgentsStr &&
-            prev.updatedAt === data.updatedAt
-          ) {
-            return prev;
-          }
           return { ...prev, ...data };
         });
 
-        // Persist to Firestore only on real status changes or once when complete (protects quota limit)
-        const allAgentsComplete = data.agents && data.agents.length > 0 && data.agents.every(a => a.status === 'complete');
-        const shouldSave = (data.status && lastSavedStatusRef.current !== data.status) || (allAgentsComplete && !hasSavedCompleteRef.current);
+        if (data.files && data.files.length > 0 && !selectedFile) {
+          const preferred = data.files.find((f) => f.path === 'src/App.tsx') || data.files[0];
+          setSelectedFile(preferred.path);
+          setFileContent(preferred.content || '');
+        }
+
+        const allAgentsComplete = data.agents && data.agents.length > 0 && data.agents.every((a) => a.status === 'complete');
+        const shouldSave =
+          (data.status && lastSavedStatusRef.current !== data.status) ||
+          (allAgentsComplete && !hasSavedCompleteRef.current);
         if (user && shouldSave) {
           lastSavedStatusRef.current = data.status;
           if (allAgentsComplete) {
@@ -200,79 +208,107 @@ export default function ProjectView({
             onProjectUpdated(data);
           }
         }
-      } else if (res.status === 404 && project) {
-        // Sync local client project into server memory so API knows about it
-        fetch('/api/projects/sync', {
+      } else if (execRes.status === 404 && project) {
+        // Sync client project to server so backend orchestrator can inspect/rebuild it
+        await fetch('/api/projects/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(project)
+          body: JSON.stringify(project),
         }).catch(() => {});
       }
+
       const streamRes = await fetch(`/api/projects/${id}/stream`);
       if (streamRes.ok) {
         const streamData = await streamRes.json();
-        if (streamData.logs && streamData.logs.length > 0) {
+        if (Array.isArray(streamData.logs) && streamData.logs.length > 0) {
           setStreamLogs(streamData.logs);
         }
       }
     } catch (e) {
-      console.warn('Could not poll project live updates:', e);
+      console.warn('Could not poll project execution snapshot:', e);
     }
   };
 
-  // Autonomous Swarm Driver: Runs agents and synthesizes code if needed
+  // Ordered SSE subscription with EventID deduplication and reconnect replay
   useEffect(() => {
-    if (!project) return;
-    const allAgentsDone = project.agents && project.agents.length > 0 && project.agents.every((a) => a.status === 'complete');
-    const needsGeneration =
-      (project.status === 'generating' ||
-        project.status === 'planning' ||
-        project.status === 'coding' ||
-        !project.files ||
-        project.files.length === 0 ||
-        (!allAgentsDone && project.status !== 'deployed')) &&
-      project.status !== 'deployed';
+    if (!id) return;
+    seenEventIdsRef.current = new Set();
+    lastSeqRef.current = 0;
 
-    if (needsGeneration && !isSwarmRunningRef.current) {
-      isSwarmRunningRef.current = true;
-      executeAutonomousSwarm(project, user?.uid, (progress, updatedProject) => {
-        setSwarmProgress(progress.percentage);
-        setStreamLogs(progress.logs);
-        const ag = updatedProject.agents?.find((a) => a.id === progress.activeAgentId);
-        if (ag) setCurrentActiveAgent(ag);
-        setProject({ ...updatedProject });
-        if (onProjectUpdated) {
-          onProjectUpdated(updatedProject);
-        }
-      })
-        .then((finalProject) => {
-          isSwarmRunningRef.current = false;
-          setProject(finalProject);
-          if (finalProject.files && finalProject.files.length > 0) {
-            const preferred = finalProject.files.find((f) => f.path === 'src/App.tsx') || finalProject.files[0];
-            setSelectedFile(preferred.path);
-            setFileContent(preferred.content || '');
-          }
-          if (onProjectUpdated) {
-            onProjectUpdated(finalProject);
-          }
-        })
-        .catch((err) => {
-          console.warn('Autonomous swarm execution notice:', err);
-          isSwarmRunningRef.current = false;
-        });
-    }
-  }, [project?.id, project?.status, project?.files?.length, user?.uid]);
-
-  useEffect(() => {
     refreshProjectData();
-    // Continue polling if swarm is active or agents are still in progress
-    const allAgentsDone = project?.agents && project.agents.length > 0 && project.agents.every(a => a.status === 'complete');
-    if (project?.status === 'deployed' && allAgentsDone) return;
 
-    const interval = setInterval(refreshProjectData, 3000);
-    return () => clearInterval(interval);
-  }, [id, user, project?.status, project?.agents]);
+    let source: EventSource | null = null;
+    let pollTimer: number | null = null;
+
+    if (typeof EventSource !== 'undefined') {
+      source = new EventSource(`/api/projects/${id}/events?sinceSeq=${lastSeqRef.current}`);
+      const handleEvent = (raw: MessageEvent) => {
+        try {
+          const evt = JSON.parse(raw.data);
+          const dedupKey = evt.eventId || `${evt.seq}`;
+          if (seenEventIdsRef.current.has(dedupKey)) return;
+          seenEventIdsRef.current.add(dedupKey);
+          if (typeof evt.seq === 'number' && evt.seq > lastSeqRef.current) {
+            lastSeqRef.current = evt.seq;
+          }
+          // Refresh execution snapshot cleanly on state transitions or tool completions
+          if (
+            evt.type === 'run:started' ||
+            evt.type === 'run:completed' ||
+            evt.type === 'run:failed' ||
+            evt.type === 'run:cancelled' ||
+            evt.type === 'task:updated' ||
+            evt.type === 'tool:completed' ||
+            evt.type === 'tool:failed' ||
+            evt.type === 'subagent:created' ||
+            evt.type === 'approval:requested' ||
+            evt.type === 'approval:resolved'
+          ) {
+            refreshProjectData();
+          }
+        } catch {
+          // Ignore malformed event frame
+        }
+      };
+
+      const eventTypes = [
+        'run:started',
+        'run:completed',
+        'run:failed',
+        'run:cancelled',
+        'task:created',
+        'task:updated',
+        'agent:status',
+        'subagent:created',
+        'agent:message',
+        'tool:pending',
+        'tool:running',
+        'tool:completed',
+        'tool:failed',
+        'approval:requested',
+        'approval:resolved',
+        'test:result',
+        'build:result',
+        'log:info',
+      ];
+      for (const evtType of eventTypes) {
+        source.addEventListener(evtType, handleEvent as EventListener);
+      }
+      source.onmessage = handleEvent;
+    }
+
+    // Light safety polling only while execution is non-terminal
+    pollTimer = window.setInterval(() => {
+      if (project?.status !== 'deployed' || executionRun?.status === 'running' || executionRun?.status === 'awaiting_approval') {
+        refreshProjectData();
+      }
+    }, 3000);
+
+    return () => {
+      if (source) source.close();
+      if (pollTimer !== null) window.clearInterval(pollTimer);
+    };
+  }, [id, user?.uid]);
 
 
   if (!project) {
@@ -405,76 +441,80 @@ export default function ProjectView({
   const runReBuild = async () => {
     if (!project) return;
     setIsRebuilding(true);
-    setActiveTab('swarm'); // Instantly navigate to Swarm view to see real-time updates!
-
-    // Mark project as actively building
-    setProject((prev) => (prev ? { ...prev, status: 'building', deploymentStatus: 'building', deploymentError: undefined } : prev));
-    setRebuildNotification('⏳ Swarm rebuild initiated... Compiling subagents and dependencies.');
-
-    const now = new Date().toLocaleTimeString();
-    setStreamLogs((prev) => [
-      ...prev,
-      {
-        timestamp: now,
-        agent: 'SRE Admin',
-        message: 'Manual rebuild triggered. Purging stale caches and dispatching multi-agent swarm...',
-        type: 'warning',
-      },
-    ]);
+    setActiveTab('swarm');
+    hasSavedCompleteRef.current = false;
+    setRebuildNotification('⏳ Dispatching real orchestrator rebuild run...');
 
     try {
-      if (onTriggerStream) {
-        onTriggerStream(project.id).catch((err) => console.warn('Stream notice:', err));
-      }
+      await fetch('/api/projects/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(project),
+      });
 
-      // Progressive simulated milestone synthesis
-      setTimeout(() => {
-        setStreamLogs((prev) => [
-          ...prev,
-          {
-            timestamp: new Date().toLocaleTimeString(),
-            agent: 'Aria CEO',
-            message: 'Aria CEO validated software specifications and delegated tasks to Senior Leads.',
-            type: 'info',
-          },
-        ]);
-      }, 700);
-
-      setTimeout(() => {
-        setStreamLogs((prev) => [
-          ...prev,
-          {
-            timestamp: new Date().toLocaleTimeString(),
-            agent: 'Frank Lead',
-            message: 'Dependencies locked: react@19.0.0, lucide-react@^0.460.0. Synthesized clean JSX structure.',
-            type: 'info',
-          },
-        ]);
-      }, 1400);
-
-      setTimeout(() => {
-        const doneTime = new Date().toLocaleTimeString();
-        setStreamLogs((prev) => [
-          ...prev,
-          {
-            timestamp: doneTime,
-            agent: 'Devon SRE',
-            message: 'Vite build verified clean in 740ms. Swarm fully synchronized and 100% operational!',
-            type: 'success',
-          },
-        ]);
-        setProject((prev) => (prev ? { ...prev, status: 'deployed', deploymentStatus: 'deployed' } : prev));
-        if (onProjectUpdated && project) {
-          onProjectUpdated({ ...project, status: 'deployed', deploymentStatus: 'deployed' });
-        }
-        setIsRebuilding(false);
-        setRebuildNotification('✓ Swarm rebuilt, validated, and synchronized successfully!');
+      const res = await fetch(`/api/projects/${project.id}/rebuild`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRebuildNotification(`Rebuild failed: ${data.error || res.statusText}`);
+      } else {
+        if (data.run) setExecutionRun(data.run);
+        if (data.project) setProject(data.project);
+        setRebuildNotification(`✓ Orchestrator rebuild run ${data.runId} started cleanly.`);
         setTimeout(() => setRebuildNotification(null), 5000);
-      }, 2200);
+      }
+      await refreshProjectData();
     } catch (e: any) {
-      console.error('Error in runReBuild:', e);
+      setRebuildNotification(`Rebuild error: ${e.message}`);
+    } finally {
       setIsRebuilding(false);
-      setProject((prev) => (prev ? { ...prev, status: 'deployed' } : prev));
+    }
+  };
+
+  const handleCancelExecution = async () => {
+    if (!project) return;
+    setIsCancelling(true);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Cancelled from workspace UI' }),
+      });
+      const data = await res.json();
+      if (data.project) setProject(data.project);
+      setRebuildNotification('Execution run cancelled by operator.');
+      await refreshProjectData();
+    } catch (e: any) {
+      setRebuildNotification(`Cancel notice: ${e.message}`);
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  const handleResolveApproval = async (approvalId: string, decision: 'approve' | 'reject') => {
+    if (!project) return;
+    setResolvingApprovalId(approvalId);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/approvals/${approvalId}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decision,
+          resolvedBy: user?.email || 'workspace-operator',
+          note: decision === 'approve' ? 'Approved in workspace UI' : 'Rejected in workspace UI',
+        }),
+      });
+      if (res.ok) {
+        setPendingApprovals((prev) => prev.filter((a) => a.id !== approvalId));
+        await refreshProjectData();
+      }
+    } catch (e) {
+      console.error('Approval resolution failed:', e);
+    } finally {
+      setResolvingApprovalId(null);
     }
   };
 
@@ -544,13 +584,25 @@ export default function ProjectView({
 
         {/* Right workspace actions */}
         <div className="flex flex-wrap items-center gap-2.5">
+          {(executionRun?.status === 'running' || executionRun?.status === 'awaiting_approval' || project.status === 'generating') && (
+            <button
+              onClick={handleCancelExecution}
+              disabled={isCancelling}
+              className="bg-rose-950/60 hover:bg-rose-900/70 border border-rose-500/40 text-rose-200 text-[10px] uppercase tracking-widest font-extrabold px-3.5 py-2.5 transition duration-200 flex items-center space-x-1.5"
+              id="cancel-run-btn"
+            >
+              <Square className="w-3.5 h-3.5" />
+              <span>{isCancelling ? 'Stopping...' : 'Stop Run'}</span>
+            </button>
+          )}
+
           <button
             onClick={() => setShowDeployModal(true)}
             className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-[10px] uppercase tracking-widest font-extrabold px-3.5 py-2.5 transition duration-200 flex items-center space-x-1.5 shadow-md"
             id="open-deploy-submit-btn"
           >
             <Share2 className="w-3.5 h-3.5" />
-            <span>Submit & Deploy</span>
+            <span>Submit &amp; Deploy</span>
           </button>
 
           <button
@@ -582,16 +634,14 @@ export default function ProjectView({
             <span>{isDeleting ? 'Deleting...' : 'Delete'}</span>
           </button>
 
-          {project.status === 'deployed' && (
-            <button
-              onClick={() => setActiveTab('preview')}
-              className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-[10px] uppercase tracking-widest font-extrabold px-4 py-2.5 transition duration-200 flex items-center space-x-1.5 shadow-md"
-              id="open-sandbox-btn"
-            >
-              <Globe className="w-3.5 h-3.5" />
-              <span>Live Preview</span>
-            </button>
-          )}
+          <button
+            onClick={() => setActiveTab('preview')}
+            className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-[10px] uppercase tracking-widest font-extrabold px-4 py-2.5 transition duration-200 flex items-center space-x-1.5 shadow-md"
+            id="open-sandbox-btn"
+          >
+            <Globe className="w-3.5 h-3.5" />
+            <span>Live Preview</span>
+          </button>
         </div>
       </div>
 
@@ -752,6 +802,60 @@ export default function ProjectView({
         </div>
       </div>
 
+      {/* Interactive Human-in-the-Loop Approval Gate Banner */}
+      {pendingApprovals.length > 0 && (
+        <div className="bg-amber-950/40 border border-amber-500/50 p-4 space-y-3 shadow-xl" id="approval-gate-banner">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-amber-300 font-mono text-xs font-bold uppercase tracking-wider">
+              <ShieldAlert className="w-4 h-4 text-amber-400" />
+              <span>Human Approval Required ({pendingApprovals.length} Pending Gate{pendingApprovals.length > 1 ? 's' : ''})</span>
+            </div>
+            <span className="text-[10px] font-mono text-amber-200/70">Orchestrator paused on sensitive action</span>
+          </div>
+          <div className="space-y-2">
+            {pendingApprovals.map((appr) => (
+              <div key={appr.id} className="bg-[#0b0b0e] border border-amber-500/30 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1 font-mono text-xs">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-white font-bold">{appr.summary}</span>
+                    <span className="text-[9px] px-1.5 py-0.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 uppercase">
+                      {appr.riskLevel} risk
+                    </span>
+                    <span className="text-[9px] px-1.5 py-0.5 bg-violet-500/20 border border-violet-500/40 text-violet-300">
+                      tool: {appr.toolName}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Requested by {appr.agentName} • Action: {appr.actionType}
+                  </div>
+                  <pre className="text-[10px] text-slate-300 bg-black p-2 border border-[#222] max-h-24 overflow-auto">
+                    {JSON.stringify(appr.details, null, 2)}
+                  </pre>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={resolvingApprovalId === appr.id}
+                    onClick={() => handleResolveApproval(appr.id, 'approve')}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-black font-bold uppercase text-[10px] tracking-wider px-3.5 py-2 transition disabled:opacity-50"
+                  >
+                    Approve Action
+                  </button>
+                  <button
+                    type="button"
+                    disabled={resolvingApprovalId === appr.id}
+                    onClick={() => handleResolveApproval(appr.id, 'reject')}
+                    className="bg-rose-700 hover:bg-rose-600 text-white font-bold uppercase text-[10px] tracking-wider px-3.5 py-2 transition disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Notifications & Deployment Status Alert */}
       {rebuildNotification && (
         <div className="p-3 bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-xs font-mono flex items-center justify-between animate-fadeIn">
@@ -837,8 +941,19 @@ export default function ProjectView({
       {/* Tab Panels */}
       {activeTab === 'swarm' && (
         <div className="space-y-6">
-          <AgentOrchestrationGraph agents={project.agents || []} projectId={project.id} project={project} onRefresh={refreshProjectData} />
-          <StreamingPanel logs={streamLogs} projectStatus={project.status} />
+          <AgentOrchestrationGraph
+            agents={project.agents || []}
+            projectId={project.id}
+            project={project}
+            executionRun={executionRun}
+            onRefresh={refreshProjectData}
+          />
+          <StreamingPanel
+            logs={streamLogs}
+            projectStatus={project.status}
+            executionRun={executionRun}
+            project={project}
+          />
         </div>
       )}
 
@@ -880,6 +995,7 @@ export default function ProjectView({
             progressPercentage={swarmProgress}
             activeAgent={currentActiveAgent}
             logs={streamLogs}
+            executionRun={executionRun}
           />
         </div>
       )}

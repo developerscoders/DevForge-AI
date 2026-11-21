@@ -58,32 +58,34 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
       { label: 'Gemini 2.5 Pro (Google)', value: 'gemini-2.5-pro', provider: 'gemini' }
     ],
     'Product Manager': [
+      { label: 'LLaMA 3.2 1B Instruct (OpenRouter Default)', value: 'meta-llama/llama-3.2-1b-instruct', provider: 'openrouter' },
+      { label: 'DeepSeek Chat V3.1 (OpenRouter)', value: 'deepseek/deepseek-chat-v3.1', provider: 'openrouter' },
       { label: 'LLaMA 3.3 70B (OpenRouter Free)', value: 'meta-llama/llama-3.3-70b-instruct:free', provider: 'openrouter' },
-      { label: 'DeepSeek Chat V3 (OpenRouter Free)', value: 'deepseek/deepseek-chat:free', provider: 'openrouter' },
       { label: 'DeepSeek R1 (OpenRouter Free)', value: 'deepseek/deepseek-r1:free', provider: 'openrouter' },
-      { label: 'Auto Free Router (OpenRouter)', value: 'openrouter/free', provider: 'openrouter' },
       { label: 'Gemini 2.5 Flash (Google)', value: 'gemini-2.5-flash', provider: 'gemini' }
     ],
     'Solution Architect': [
+      { label: 'DeepSeek Chat V3.1 (OpenRouter Default)', value: 'deepseek/deepseek-chat-v3.1', provider: 'openrouter' },
+      { label: 'LLaMA 3.2 1B Instruct (OpenRouter)', value: 'meta-llama/llama-3.2-1b-instruct', provider: 'openrouter' },
       { label: 'DeepSeek R1 Reasoning (OpenRouter Free)', value: 'deepseek/deepseek-r1:free', provider: 'openrouter' },
-      { label: 'DeepSeek Chat V3 (OpenRouter Free)', value: 'deepseek/deepseek-chat:free', provider: 'openrouter' },
       { label: 'Qwen 2.5 Coder 32B (OpenRouter Free)', value: 'qwen/qwen-2.5-coder-32b-instruct:free', provider: 'openrouter' },
-      { label: 'LLaMA 3.3 70B (OpenRouter Free)', value: 'meta-llama/llama-3.3-70b-instruct:free', provider: 'openrouter' },
       { label: 'Gemini 2.5 Pro (Google)', value: 'gemini-2.5-pro', provider: 'gemini' }
     ],
     'Frontend Engineer': [
+      { label: 'LLaMA 3.3 70B (NVIDIA NIM / Fallback)', value: 'meta/llama-3.3-70b-instruct', provider: 'nvidia' },
       { label: 'LLaMA 3.1 70B (NVIDIA NIM)', value: 'meta/llama-3.1-70b-instruct', provider: 'nvidia' },
-      { label: 'Nemotron 340B (NVIDIA NIM)', value: 'nvidia/nemotron-4-340b-instruct', provider: 'nvidia' },
       { label: 'Gemini 2.5 Flash (Google)', value: 'gemini-2.5-flash', provider: 'gemini' }
     ],
     'QA/Test Engineer': [
-      { label: 'LLaMA 3.3 70B Versatile (Groq Free)', value: 'llama-3.3-70b-versatile', provider: 'groq' },
-      { label: 'Mixtral 8x7B (Groq Free)', value: 'mixtral-8x7b-32768', provider: 'groq' },
-      { label: 'DeepSeek R1 (OpenRouter Free)', value: 'deepseek/deepseek-r1:free', provider: 'openrouter' }
+      { label: 'GPT OSS 20B (Groq Default)', value: 'openai/gpt-oss-20b', provider: 'groq' },
+      { label: 'GPT OSS 120B (Groq)', value: 'openai/gpt-oss-120b', provider: 'groq' },
+      { label: 'Compound Mini (Groq)', value: 'groq/compound-mini', provider: 'groq' },
+      { label: 'LLaMA 3.3 70B Versatile (Groq Free)', value: 'llama-3.3-70b-versatile', provider: 'groq' }
     ],
     'DevOps Engineer': [
-      { label: 'Mixtral 8x7B 32k (Groq Free)', value: 'mixtral-8x7b-32768', provider: 'groq' },
-      { label: 'LLaMA 3.3 70B (Groq Free)', value: 'llama-3.3-70b-versatile', provider: 'groq' },
+      { label: 'GPT OSS 20B (Groq Default)', value: 'openai/gpt-oss-20b', provider: 'groq' },
+      { label: 'GPT OSS 120B (Groq)', value: 'openai/gpt-oss-120b', provider: 'groq' },
+      { label: 'Compound Mini (Groq)', value: 'groq/compound-mini', provider: 'groq' },
       { label: 'Gemini 2.5 Flash (Google)', value: 'gemini-2.5-flash', provider: 'gemini' }
     ]
   };
@@ -423,7 +425,7 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
             <div className="bg-[#050505] p-3 border border-[#222222]">
               <Sparkles className="w-3.5 h-3.5 text-slate-500 mx-auto mb-1" />
               <div className="text-[8px] label text-slate-500">Nodes</div>
-              <div className="text-xs font-mono font-bold text-violet-400 mt-1">{metrics.selectedCount} / 5</div>
+              <div className="text-xs font-mono font-bold text-violet-400 mt-1">{metrics.selectedCount} / 6</div>
             </div>
           </div>
         </div>
