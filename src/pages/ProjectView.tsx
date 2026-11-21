@@ -97,6 +97,7 @@ export default function ProjectView({
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const lastSeqRef = useRef<number>(0);
   const hasSavedCompleteRef = useRef<boolean>(false);
+  const lastSavedFilesSnapshotRef = useRef<string>('');
 
   // 1. Initial Load from Props, Firestore, or Server
   useEffect(() => {
@@ -195,18 +196,22 @@ export default function ProjectView({
         }
 
         const allAgentsComplete = data.agents && data.agents.length > 0 && data.agents.every((a) => a.status === 'complete');
-        const shouldSave =
-          (data.status && lastSavedStatusRef.current !== data.status) ||
-          (allAgentsComplete && !hasSavedCompleteRef.current);
-        if (user && shouldSave) {
-          lastSavedStatusRef.current = data.status;
-          if (allAgentsComplete) {
-            hasSavedCompleteRef.current = true;
-          }
+        // Persist when generated source changes, not only when the run status flips.
+        // A growing project can otherwise appear in the workspace but never reach Firestore.
+        const filesSnapshot = JSON.stringify((data.files || []).map((file) => ({
+          path: file.path,
+          type: file.type,
+          content: file.content,
+        })));
+        const filesChanged = filesSnapshot !== lastSavedFilesSnapshotRef.current;
+        const statusChanged = Boolean(data.status && lastSavedStatusRef.current !== data.status);
+        const completionChanged = allAgentsComplete && !hasSavedCompleteRef.current;
+        if (user && (statusChanged || completionChanged || filesChanged)) {
           await saveFirestoreProject(data, user.uid);
-          if (onProjectUpdated) {
-            onProjectUpdated(data);
-          }
+          lastSavedStatusRef.current = data.status;
+          lastSavedFilesSnapshotRef.current = filesSnapshot;
+          if (allAgentsComplete) hasSavedCompleteRef.current = true;
+          if (onProjectUpdated) onProjectUpdated(data);
         }
       } else if (execRes.status === 404 && project) {
         // Sync client project to server so backend orchestrator can inspect/rebuild it
