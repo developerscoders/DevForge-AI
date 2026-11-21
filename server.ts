@@ -30,7 +30,7 @@ import {
   getAllToolsAvailabilityStatus,
   runTypeScriptAstDiagnostics
 } from './src/lib/tools/toolRegistry.js';
-import { redactSecrets } from './src/lib/security/executionSecurity.js';
+import { redactSecrets, ensureProjectWorkspaceDir, resolveSafeWorkspacePath } from './src/lib/security/executionSecurity.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -263,6 +263,63 @@ app.get('/api/projects/:id/files/:filePath(*)', (req, res) => {
   const file = project.files?.find((f: any) => f.path === targetPath);
   if (!file) return res.status(404).json({ success: false, error: 'File not found in project' });
   res.json({ success: true, file });
+});
+
+// Actual generated-app preview. The preview is served only from the isolated
+// workspace's Vite build output; no prompt-keyword demo or synthetic UI is used.
+app.get('/api/projects/:id/preview/status', (req, res) => {
+  const projectId = req.params.id;
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) {
+    return res.status(400).json({ success: false, status: 'invalid_project_id' });
+  }
+  const project = findOrHydrateProject(projectId);
+  if (!project) return res.status(404).json({ success: false, status: 'project_not_found' });
+
+  try {
+    const root = ensureProjectWorkspaceDir(projectId);
+    const indexPath = resolveSafeWorkspacePath(projectId, 'dist/index.html');
+    const packagePath = resolveSafeWorkspacePath(projectId, 'package.json');
+    const hasBuild = fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
+    return res.json({
+      success: true,
+      status: hasBuild ? 'ready' : (project.status === 'failed' ? 'failed' : 'not_built'),
+      previewUrl: hasBuild ? `/preview/${encodeURIComponent(projectId)}/` : null,
+      filesCount: project.files?.length || 0,
+      hasPackageJson: fs.existsSync(packagePath),
+      message: hasBuild ? 'Serving the actual generated Vite build.' : 'No successful dist/index.html exists yet. Run dependency installation (with approval) and the real build tool.',
+    });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, status: 'preview_error', error: error?.message || 'Preview path validation failed' });
+  }
+});
+
+// Serve actual built files. Unknown client-side routes fall back to the generated
+// index.html, while all paths remain constrained to this project's dist folder.
+app.get('/preview/:id', (req, res) => {
+  const projectId = req.params.id;
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) return res.sendStatus(400);
+  try {
+    const indexPath = resolveSafeWorkspacePath(projectId, 'dist/index.html');
+    if (!fs.existsSync(indexPath)) return res.status(404).send('Preview is not built yet. Run the project build first.');
+    return res.sendFile(indexPath);
+  } catch {
+    return res.sendStatus(400);
+  }
+});
+
+app.get('/preview/:id/*', (req, res) => {
+  const projectId = req.params.id;
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) return res.sendStatus(400);
+  const requested = String(req.params[0] || '').replace(/^\\/+/, '');
+  try {
+    const target = resolveSafeWorkspacePath(projectId, path.posix.join('dist', requested));
+    if (fs.existsSync(target) && fs.statSync(target).isFile()) return res.sendFile(target);
+    const indexPath = resolveSafeWorkspacePath(projectId, 'dist/index.html');
+    if (fs.existsSync(indexPath)) return res.sendFile(indexPath);
+    return res.status(404).send('Preview asset not found.');
+  } catch {
+    return res.sendStatus(400);
+  }
 });
 
 app.get('/api/projects/:id/preview', (req, res) => {
