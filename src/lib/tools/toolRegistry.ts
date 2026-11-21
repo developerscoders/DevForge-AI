@@ -856,7 +856,8 @@ const registryEntries: RegisteredTool[] = [
         };
       }
 
-      // Parse test AST via TypeScript compiler and audit real assertions
+      // Static inspection is NOT a test run. Never report success or coverage
+      // when no executable test runner is installed in the generated workspace.
       const testFiles = (proj.files || []).filter(
         (f) =>
           (f.path.includes('.test.') || f.path.includes('.spec.') || f.path.startsWith('tests/')) &&
@@ -871,21 +872,21 @@ const registryEntries: RegisteredTool[] = [
         (sum, f) => sum + ((f.content || '').match(/\bexpect\s*\(/g) || []).length,
         0
       );
-      const coverage = runCoverageAnalysis(proj);
 
       return {
         output: {
-          executedRunner: 'ast_and_coverage_verifier',
+          executed: false,
+          executedRunner: null,
+          verdict: 'not_executed',
+          passed: null,
           workspaceDependenciesInstalled: false,
           testFilesCount: testFiles.length,
-          testCasesCount: testCases,
-          assertionsCount: assertions,
+          testCasesDetected: testCases,
+          assertionsDetected: assertions,
           syntaxErrors,
-          verdict: syntaxErrors.length === 0 ? coverage.verdict : 'syntax_error',
-          lineCoverage: coverage.lineCoverage,
-          branchCoverage: coverage.branchCoverage,
+          reason: 'No executable Vitest runner is installed in this project workspace. Static syntax inspection is not a substitute for executing tests.',
         },
-        stdout: `Verified ${testFiles.length} test file(s): ${testCases} test cases, ${assertions} assertions. Line coverage ${coverage.lineCoverage}%, branch coverage ${coverage.branchCoverage}%.`,
+        stdout: `Test execution skipped: detected ${testFiles.length} test file(s), ${testCases} test declarations and ${assertions} assertion calls, but no executable test runner is installed.`,
         stderr: syntaxErrors.length > 0 ? syntaxErrors.join('\n') : undefined,
       };
     },
@@ -927,15 +928,19 @@ const registryEntries: RegisteredTool[] = [
 
       return {
         output: {
-          executed: 'static_build_preflight',
+          executed: false,
+          executedBuild: false,
+          status: 'preflight_only',
+          passed: null,
           workspaceDependenciesInstalled: false,
-          passed: astErrors.length === 0 && missing.length === 0,
+          preflightPassed: astErrors.length === 0 && missing.length === 0,
           missingArtifacts: missing,
           astErrors,
+          reason: 'Dependencies are not installed. Configuration and AST checks do not prove that the application builds.',
         },
         stdout:
           astErrors.length === 0 && missing.length === 0
-            ? 'Build preflight checks passed cleanly (all entrypoints and AST syntax verified).'
+            ? 'Build preflight only: entrypoints and AST syntax inspected. No compiler/bundler was executed.'
             : undefined,
         stderr: [...missing.map((m) => `Missing ${m}`), ...astErrors].join('\n') || undefined,
       };
