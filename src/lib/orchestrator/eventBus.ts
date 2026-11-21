@@ -159,7 +159,12 @@ class OrchestratorEventBus {
           message: `Executing tool: ${d.toolName}...`,
           type: 'info',
         };
-      case 'tool:completed':
+      case 'tool:completed': {
+        const result = d.output || d.result || {};
+        const wasOnlyPreflight =
+          result.executed === false ||
+          result.verdict === 'not_executed' ||
+          result.status === 'preflight_only';
         return {
           id: event.eventId,
           timestamp: timeStr,
@@ -167,9 +172,12 @@ class OrchestratorEventBus {
           agentId: event.agentId,
           executionId: event.executionId,
           toolName: d.toolName,
-          message: `Tool succeeded: ${d.toolName} (${d.durationMs ?? 0}ms)`,
-          type: 'success',
+          message: wasOnlyPreflight
+            ? `Tool did not execute: ${d.toolName} — ${result.reason || result.status || 'preflight only'}`
+            : `Tool succeeded: ${d.toolName} (${d.durationMs ?? 0}ms)`,
+          type: wasOnlyPreflight ? 'warning' : 'success',
         };
+      }
       case 'tool:failed':
         return {
           id: event.eventId,

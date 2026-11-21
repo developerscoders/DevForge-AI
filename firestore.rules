@@ -23,6 +23,17 @@ service cloud.firestore {
     match /projects/{projectId} {
       allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
       allow read, update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+
+      // Generated source files are stored one document per path to avoid the
+      // Firestore 1 MiB document-size limit on large projects.
+      match /files/{fileId} {
+        function projectOwner() {
+          return signedIn() &&
+            get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
+        }
+        allow read, create, update, delete: if projectOwner();
+      }
+
       match /exports/{exportId} {
         allow create: if isOwner(get(/databases/$(database)/documents/projects/$(projectId)).data.userId)
           && request.resource.data.userId == request.auth.uid;
