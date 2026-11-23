@@ -110,7 +110,7 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
       { label: 'OpenRouter Free Auto Router', value: 'openrouter/free', provider: 'openrouter' },
     ],
     'QA/Test Engineer': [
-      { label: 'Dots 3 Note Preview (Free)', value: 'dots-studio/dots-3-note-preview:free', provider: 'openrouter' },
+      { label: 'Nemotron 3.5 Super VL (Free · QA)', value: 'nvidia/nemotron-3.5-super-vl:free', provider: 'openrouter' },
       { label: 'ERNIE 5.5 Flash Preview (Free)', value: 'baidu/ernie-5.5-flash-preview:free', provider: 'openrouter' },
       { label: 'Nemotron 3.5 Lightning (Free)', value: 'nvidia/nemotron-3.5-lightning:free', provider: 'openrouter' },
       { label: 'OpenRouter Free Auto Router', value: 'openrouter/free', provider: 'openrouter' },
