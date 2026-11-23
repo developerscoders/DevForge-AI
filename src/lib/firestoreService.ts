@@ -379,7 +379,8 @@ async function persistFirestoreProjectRun(projectId: string, run: any): Promise<
       updatedAt: new Date().toISOString(),
     });
     const key = `${projectId}:${run.runId}:${executionId}`;
-    const signature = JSON.stringify(data);
+    const { updatedAt: _updatedAt, ...signatureData } = data;
+    const signature = JSON.stringify(signatureData);
     if (persistedToolRecordSignatures.get(key) !== signature) {
       changedRecords.push({ executionId, key, signature, data });
     }
