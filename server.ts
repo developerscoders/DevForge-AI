@@ -182,6 +182,7 @@ getActivePlans().catch(() => {});
 executionStore.ensureLoaded();
 db.projects.push(...executionStore.getAllProjects());
 const activeSreStreams: Record<string, any[]> = {};
+const firestoreHydratedProjectIds = new Set<string>();
 
 function findOrHydrateProject(projectId: string) {
   let proj = db.projects.find((p) => p.id === projectId);
@@ -204,40 +205,66 @@ async function findOrHydrateProjectForRequest(req: express.Request, projectId: s
   const idToken = getBearerToken(req);
   if (!idToken) throw new Error('AUTH_REQUIRED: Sign in to access this project.');
   const user = await verifyFirebaseIdToken(idToken);
-  const local = findOrHydrateProject(projectId);
-  if (local) {
-    if (!local.userId || local.userId !== user.uid) {
+  let local = findOrHydrateProject(projectId);
+
+  if (firestoreHydratedProjectIds.has(projectId)) {
+    if (!local || !local.userId || local.userId !== user.uid) {
       throw new Error('PROJECT_FORBIDDEN: This project does not belong to the authenticated Firebase user.');
     }
-    local.modelConfig = normalizeFreeModelConfig(local.modelConfig || {});
     return local;
   }
 
-  const remote = await loadOwnedProjectFromFirestore(projectId, idToken);
-  if (!remote) return null;
-  remote.modelConfig = normalizeFreeModelConfig(remote.modelConfig || {});
-  executionStore.saveProject(remote);
-  if (remote.lastExecutionRun?.runId) {
-    const recoveredRun = { ...remote.lastExecutionRun };
-    if (recoveredRun.status === 'running' || recoveredRun.status === 'queued' || recoveredRun.status === 'awaiting_approval') {
-      const now = new Date().toISOString();
-      recoveredRun.status = 'failed';
-      recoveredRun.completedAt = now;
-      recoveredRun.recoveredFromRestart = true;
-      recoveredRun.error = 'Execution was interrupted when the previous server instance stopped. Rebuild to resume.';
-      for (const task of recoveredRun.tasks || []) {
-        if (['running', 'pending', 'blocked', 'awaiting_approval'].includes(task.status)) {
-          task.status = 'failed';
-          task.completedAt = now;
-          task.error = 'Interrupted by server instance restart';
+  try {
+    // Hydrate once per server instance even when an older executions.json snapshot
+    // exists. Cloud Run local state can be stale after a replacement instance starts.
+    const remote = await loadOwnedProjectFromFirestore(projectId, idToken);
+    if (!remote) {
+      if (local?.userId === user.uid) {
+        firestoreHydratedProjectIds.add(projectId);
+        return local;
+      }
+      return null;
+    }
+
+    remote.modelConfig = normalizeFreeModelConfig(remote.modelConfig || {});
+    if (remote.lastExecutionRun?.runId) {
+      const recoveredRun = { ...remote.lastExecutionRun };
+      if (recoveredRun.status === 'running' || recoveredRun.status === 'queued' || recoveredRun.status === 'awaiting_approval') {
+        const now = new Date().toISOString();
+        recoveredRun.status = 'failed';
+        recoveredRun.completedAt = now;
+        recoveredRun.recoveredFromRestart = true;
+        recoveredRun.error = 'Execution was interrupted when the previous server instance stopped. Rebuild to resume.';
+        for (const task of recoveredRun.tasks || []) {
+          if (['running', 'pending', 'blocked', 'awaiting_approval'].includes(task.status)) {
+            task.status = 'failed';
+            task.completedAt = now;
+            task.error = 'Interrupted by server instance restart';
+          }
         }
       }
+      executionStore.saveRun(recoveredRun);
+      remote.lastExecutionRun = recoveredRun;
     }
-    executionStore.saveRun(recoveredRun);
-    remote.lastExecutionRun = recoveredRun;
+
+    executionStore.saveProject(remote);
+    const existingIndex = db.projects.findIndex((project: any) => project.id === projectId);
+    if (existingIndex >= 0) db.projects[existingIndex] = remote;
+    else db.projects.push(remote);
+    firestoreHydratedProjectIds.add(projectId);
+    return remote;
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    if (message.startsWith('PROJECT_FORBIDDEN')) throw error;
+    if (local?.userId === user.uid) {
+      // Firestore can be temporarily unavailable; keep an owned local snapshot
+      // usable, but the API still reports its persistence state through health logs.
+      console.warn('[Firestore hydration fallback]', message);
+      firestoreHydratedProjectIds.add(projectId);
+      return local;
+    }
+    throw error;
   }
-  db.projects.push(remote);
-  return remote;
 }
 
 function sendProjectHydrationError(res: express.Response, error: any) {
