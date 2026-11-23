@@ -85,6 +85,19 @@ export const AGENT_ROSTER: Record<AgentRosterEntry['key'], AgentRosterEntry> = {
   },
 };
 
+/** Reject stale/paid model IDs from saved project settings and keep the swarm on free OpenRouter endpoints. */
+export function isFreeOpenRouterModel(modelId?: string): boolean {
+  const id = (modelId || '').trim();
+  return id === 'openrouter/free' || (
+    id.endsWith(':free') &&
+    PROVIDER_MODEL_CATALOG.openrouter.some((model) => model.id === id)
+  );
+}
+
+export function resolveFreeAgentModel(key: AgentRosterEntry['key'], requestedModel?: string): string {
+  return isFreeOpenRouterModel(requestedModel) ? requestedModel!.trim() : AGENT_ROSTER[key].defaultModel;
+}
+
 export const DEFAULT_MODEL_CONFIG = {
   'CEO Orchestrator': AGENT_ROSTER.aria.defaultModel,
   'Product Manager': AGENT_ROSTER.parker.defaultModel,
