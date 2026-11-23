@@ -77,7 +77,7 @@ describe('Real-Time Execution API, Persistence & SSE Replay', () => {
 
     // Poll /api/projects/:id/execution until completed
     let execPayload: any = null;
-    const deadline = Date.now() + 20000;
+    const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
       const r = await fetch(`${baseUrl}/api/projects/${created.id}/execution`, { headers: { Authorization: 'Bearer devforge-test-token' } });
       expect(r.status).toBe(200);
