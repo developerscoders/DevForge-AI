@@ -220,7 +220,7 @@ export default function ProjectView({
         const statusChanged = Boolean(data.status && lastSavedStatusRef.current !== data.status);
         const completionChanged = allAgentsComplete && !hasSavedCompleteRef.current;
         if (user && (statusChanged || completionChanged || filesChanged || runChanged)) {
-          await saveFirestoreProject(data, user.uid);
+          await saveFirestoreProject(data, user.uid, { persistFiles: filesChanged });
           lastSavedStatusRef.current = data.status;
           lastSavedFilesSnapshotRef.current = filesSnapshot;
           lastSavedRunSnapshotRef.current = runSnapshot;
