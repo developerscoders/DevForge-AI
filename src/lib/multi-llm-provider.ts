@@ -56,11 +56,15 @@ export interface LLMResponse {
   isSimulated: boolean;
 }
 
+// Free-only fallback chain. Keep these IDs aligned with OpenRouter's live free catalog;
+// OpenRouter may rotate free capacity, so the final router is retained as a dynamic fallback.
 const DEFAULT_OPENROUTER_FALLBACKS = [
-  'deepseek/deepseek-chat-v3.1',
-  'qwen/qwen-2.5-coder-32b-instruct:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'deepseek/deepseek-chat:free',
+  'cohere/north-mini-code:free',
+  'recursive/flint-v1.0:free',
+  'particle-ai/particle-1:free',
+  'inclusionai/ling-3.2-flash:free',
+  'baidu/ernie-5.5-flash-preview:free',
+  'nvidia/nemotron-3.5-lightning:free',
   'openrouter/free',
 ];
 
