@@ -199,6 +199,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentRoleDefinition> = {
       'read_file',
       'write_file',
       'edit_file',
+      'install_dependencies',
       'run_build',
       'run_linter',
       'git_status',
