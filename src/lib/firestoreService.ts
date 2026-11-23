@@ -338,6 +338,51 @@ async function persistFirestoreProjectFiles(projectId: string, files: FileNode[]
   }
 }
 
+async function persistFirestoreProjectRun(projectId: string, run: any): Promise<void> {
+  if (!run?.runId) return;
+  const { toolExecutions = [], ...runMetadata } = run;
+  const runRef = doc(db, 'projects', projectId, 'runs', run.runId);
+  await safeFirestoreSetDoc(runRef, {
+    ...runMetadata,
+    toolCount: toolExecutions.length,
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+
+  for (let offset = 0; offset < toolExecutions.length; offset += FIRESTORE_BATCH_LIMIT) {
+    const batch = writeBatch(db);
+    for (const record of toolExecutions.slice(offset, offset + FIRESTORE_BATCH_LIMIT)) {
+      const executionId = String(record.executionId || `tool_${offset}`);
+      const inputArgs = { ...(record.inputArgs || {}) };
+      // Source text is already persisted in the project's files subcollection.
+      // Keep a compact, auditable reference here instead of duplicating large file bodies.
+      if (record.toolName === 'write_file' && typeof inputArgs.content === 'string') {
+        inputArgs.contentBytes = new TextEncoder().encode(inputArgs.content).length;
+        inputArgs.contentPersistedAsProjectFile = true;
+        delete inputArgs.content;
+      }
+      batch.set(
+        doc(db, 'projects', projectId, 'runs', run.runId, 'tools', encodeURIComponent(executionId)),
+        { ...record, inputArgs, projectId, runId: run.runId, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
+    }
+    await batch.commit();
+  }
+}
+
+async function fetchFirestoreProjectRun(projectId: string, runId?: string): Promise<any | null> {
+  if (!runId) return null;
+  const runRef = doc(db, 'projects', projectId, 'runs', runId);
+  const runSnap = await getDoc(runRef);
+  if (!runSnap.exists()) return null;
+  const runData = runSnap.data();
+  const toolsSnap = await getDocs(collection(db, 'projects', projectId, 'runs', runId, 'tools'));
+  const toolExecutions = toolsSnap.docs
+    .map((toolDoc) => toolDoc.data())
+    .sort((a: any, b: any) => new Date(a.startedAt || a.timestamp || 0).getTime() - new Date(b.startedAt || b.timestamp || 0).getTime());
+  return { ...runData, toolExecutions };
+}
+
 export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]> => {
   const localList = getLocalStoredProjects(userId);
   if (isFirestoreQuotaExhausted()) return localList;
@@ -350,7 +395,8 @@ export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]
       const data = d.data();
       const storedFiles = await fetchFirestoreProjectFiles(d.id).catch(() => []);
       const files = storedFiles.length > 0 ? storedFiles : (Array.isArray(data.files) ? data.files : []);
-      return { id: d.id, ...data, files } as Project;
+      const lastExecutionRun = await fetchFirestoreProjectRun(d.id, data.lastRunId);
+      return { id: d.id, ...data, files, lastExecutionRun: lastExecutionRun || data.lastExecutionRun } as Project;
     }));
 
     const map = new Map<string, Project>();
@@ -381,7 +427,8 @@ export const fetchFirestoreProjectById = async (projectId: string): Promise<Proj
     const data = snap.data();
     const storedFiles = await fetchFirestoreProjectFiles(projectId).catch(() => []);
     const files = storedFiles.length > 0 ? storedFiles : (Array.isArray(data.files) ? data.files : []);
-    const remote = { id: snap.id, ...data, files } as Project;
+    const lastExecutionRun = await fetchFirestoreProjectRun(snap.id, data.lastRunId);
+    const remote = { id: snap.id, ...data, files, lastExecutionRun: lastExecutionRun || data.lastExecutionRun } as Project;
     if (local && new Date(local.updatedAt || 0).getTime() > new Date(remote.updatedAt || 0).getTime()) return local;
     return remote;
   } catch (e: any) {
@@ -402,17 +449,19 @@ export const saveFirestoreProject = async (
   if (!currentUid || isFirestoreQuotaExhausted()) return;
 
   try {
-    const { files = [], ...metadata } = project;
+    const { files = [], lastExecutionRun, ...metadata } = project;
     const docRef = doc(db, 'projects', project.id);
     const saved = await safeFirestoreSetDoc(docRef, {
       ...metadata,
       files: [],
       fileCount: files.filter((file) => file.type !== 'folder').length,
+      lastRunId: lastExecutionRun?.runId || metadata.lastRunId || null,
       userId: currentUid,
       updatedAt: new Date().toISOString(),
     }, { merge: true });
     if (!saved || isFirestoreQuotaExhausted()) return;
     if (options.persistFiles !== false) await persistFirestoreProjectFiles(project.id, files);
+    if (lastExecutionRun?.runId) await persistFirestoreProjectRun(project.id, lastExecutionRun);
   } catch (e: any) {
     if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     console.warn('[Firestore] Project/file persistence failed:', e?.message || e);
