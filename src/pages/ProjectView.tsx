@@ -162,7 +162,12 @@ export default function ProjectView({
   const refreshProjectData = async () => {
     if (!id) return;
     try {
-      const execRes = await fetch(`/api/projects/${id}/execution`);
+      const idToken = user ? await user.getIdToken() : '';
+      if (!idToken) throw new Error('Sign in to restore this project execution from Firestore.');
+      const execRes = await fetch(`/api/projects/${id}/execution`, {
+        headers: { Authorization: `Bearer ${idToken}` },
+        cache: 'no-store',
+      });
       if (execRes.ok) {
         const execData = await execRes.json();
         const data: Project = execData.project;
