@@ -181,8 +181,13 @@ export default function ProjectView({
         }
         setPendingApprovals(approvals);
 
-        const activeAg = data.agents?.find((a) => a.status === 'active' || a.status === 'thinking') || data.agents?.[0];
-        if (activeAg) setCurrentActiveAgent(activeAg);
+        // Never fall back to agents[0]: that pins Aria as "currently executing"
+        // after her planning task has completed, even while another agent is working.
+        const runningAgentId = run?.tasks?.find((task) => task.status === 'running')?.agentId;
+        const activeAg =
+          data.agents?.find((agent) => ['active', 'thinking', 'healing'].includes(agent.status)) ||
+          (runningAgentId ? data.agents?.find((agent) => agent.id === runningAgentId) : undefined);
+        setCurrentActiveAgent(activeAg);
 
         setProject((prev) => {
           if (!prev) return data;
