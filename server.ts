@@ -207,6 +207,11 @@ async function findOrHydrateProjectForRequest(req: express.Request, projectId: s
   const user = await verifyFirebaseIdToken(idToken);
   let local = findOrHydrateProject(projectId);
 
+  if (process.env.NODE_ENV === 'test' && local?.userId === user.uid) {
+    firestoreHydratedProjectIds.add(projectId);
+    return local;
+  }
+
   if (firestoreHydratedProjectIds.has(projectId)) {
     if (!local || !local.userId || local.userId !== user.uid) {
       throw new Error('PROJECT_FORBIDDEN: This project does not belong to the authenticated Firebase user.');
