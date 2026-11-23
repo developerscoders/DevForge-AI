@@ -209,6 +209,7 @@ async function findOrHydrateProjectForRequest(req: express.Request, projectId: s
     if (!local.userId || local.userId !== user.uid) {
       throw new Error('PROJECT_FORBIDDEN: This project does not belong to the authenticated Firebase user.');
     }
+    local.modelConfig = normalizeFreeModelConfig(local.modelConfig || {});
     return local;
   }
 
