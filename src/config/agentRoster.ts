@@ -107,6 +107,17 @@ export const DEFAULT_MODEL_CONFIG = {
   'DevOps Engineer': AGENT_ROSTER.devon.defaultModel,
 } as const;
 
+export function normalizeFreeModelConfig(input: Record<string, string> = {}) {
+  return {
+    'CEO Orchestrator': resolveFreeAgentModel('aria', input['CEO Orchestrator']),
+    'Product Manager': resolveFreeAgentModel('parker', input['Product Manager']),
+    'Solution Architect': resolveFreeAgentModel('sophia', input['Solution Architect']),
+    'Frontend Engineer': resolveFreeAgentModel('frank', input['Frontend Engineer']),
+    'QA/Test Engineer': resolveFreeAgentModel('quinn', input['QA/Test Engineer']),
+    'DevOps Engineer': resolveFreeAgentModel('devon', input['DevOps Engineer']),
+  };
+}
+
 export const rosterById = (id: AgentRosterEntry['id']) =>
   Object.values(AGENT_ROSTER).find((entry) => entry.id === id)!;
 
