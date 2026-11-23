@@ -59,7 +59,7 @@ export interface LLMResponse {
 // Free-only fallback chain. Keep these IDs aligned with OpenRouter's live free catalog;
 // OpenRouter may rotate free capacity, so the final router is retained as a dynamic fallback.
 const DEFAULT_OPENROUTER_FALLBACKS = [
-  'cohere/north-mini-code:free',
+  'nvidia/nemotron-3.5-super-vl:free',
   'recursive/flint-v1.0:free',
   'particle-ai/particle-1:free',
   'inclusionai/ling-3.2-flash:free',
