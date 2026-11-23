@@ -13,6 +13,7 @@ import {
   AGENT_ROSTER,
   DEFAULT_MODEL_CONFIG,
   inferProviderFromModel,
+  resolveFreeAgentModel,
 } from '../../config/agentRoster.js';
 import { buildAgentPrompt } from '../../config/agentPromptRegistry.js';
 import {
@@ -244,7 +245,7 @@ export function buildInitialAgentsForProject(
 ): Agent[] {
   return Object.values(AGENT_DEFINITIONS).map((def) => {
     const rosterEntry = AGENT_ROSTER[def.key];
-    const configuredModel = modelConfig[def.modelConfigRoleKey] || rosterEntry.defaultModel;
+    const configuredModel = resolveFreeAgentModel(def.key, modelConfig[def.modelConfigRoleKey]);
     return {
       id: def.id,
       name: def.name,
@@ -321,10 +322,10 @@ class MultiAgentOrchestrator {
           const rosterEntry = AGENT_ROSTER[def.key];
           ag.responsibility = def.responsibility;
           ag.allowedTools = [...def.allowedTools];
-          const requested = project.modelConfig?.[def.modelConfigRoleKey] || rosterEntry.defaultModel;
+          const requested = resolveFreeAgentModel(def.key, project.modelConfig?.[def.modelConfigRoleKey]);
           ag.model = requested;
           ag.requestedModel = requested;
-          ag.provider = inferProviderFromModel(requested, rosterEntry.provider);
+          ag.provider = 'openrouter';
           ag.status = ag.id === 'ag_ceo' ? 'thinking' : 'waiting';
           ag.error = undefined;
           ag.fallbackUsed = false;
@@ -1263,8 +1264,8 @@ class MultiAgentOrchestrator {
     const def = Object.values(AGENT_DEFINITIONS).find((d) => d.key === agentKey)!;
     const roster = AGENT_ROSTER[agentKey];
     const requested = project.modelConfig?.[def.modelConfigRoleKey];
-    const model = requested || roster.defaultModel;
-    const provider = inferProviderFromModel(model, roster.provider);
+    const model = resolveFreeAgentModel(agentKey, requested);
+    const provider = 'openrouter';
     return { provider, model, fallbackModels: roster.fallbackModels };
   }
 
