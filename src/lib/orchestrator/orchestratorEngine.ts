@@ -1342,27 +1342,35 @@ class MultiAgentOrchestrator {
           { ...toolCtxBase, agentId: 'ag_ceo', agentName: 'Aria CEO' }
         );
 
-        let geminiNotes = '';
-        if (getSharedGeminiClient()) {
-          try {
-            const gemRes = await runAgentWithGeminiTools({
-              model: resolved.model,
-              systemInstruction: ARIA_SYSTEM_INSTRUCTIONS,
-              userPrompt: `Inspect workspace "${projectName}" for complete prompt:\n${fullPrompt}\nCall inspect_project_structure or list_files once and summarize architectural focus areas.`,
-              toolContext: { ...toolCtxBase, agentId: 'ag_ceo', agentName: 'Aria CEO' },
-              allowedTools: ['inspect_project_structure', 'list_files'],
-              maxIterations: 2,
-              timeoutMs: 12000,
-            });
-            geminiNotes = gemRes.text;
-            const run = executionStore.getRun(runId);
-            if (run) {
-              run.metrics.totalTokensUsed += gemRes.tokensUsed;
-              executionStore.saveRun(run);
-            }
-          } catch {
-            // Non-blocking: deterministic classification + DAG proceeds cleanly
+        // Use the same selected free OpenRouter provider as the rest of the swarm.
+        // Do not send an OpenRouter model ID to the Gemini SDK: that silently fails
+        // and made the CEO appear to be thinking without doing useful model work.
+        let orchestrationNotes = '';
+        let actualModelUsed = `${resolved.provider} (${resolved.model})`;
+        try {
+          const agentResult = await runAgentWithControlledToolActions({
+            provider: resolved.provider,
+            model: resolved.model,
+            fallbackModels: resolved.fallbackModels,
+            systemInstruction: 'You are Aria, the engineering orchestrator. Preserve the complete user intent. Inspect the workspace, identify the deliverables, and use only the allowed tools. Do not claim a build, test, or file write unless the tool actually returned success.',
+            userPrompt: `Original user request (preserve all requirements):\n${fullPrompt}\n\nProject classification: ${classification.project_type}. Features: ${features.map((f: any) => f.name || f.id || String(f)).join(', ')}. Inspect the workspace and provide concise implementation directives for Parker and the downstream engineering agents.`,
+            toolContext: { ...toolCtxBase, agentId: 'ag_ceo', agentName: 'Aria CEO' },
+            allowedTools: ['inspect_project_structure', 'list_files', 'read_file'],
+            maxIterations: 4,
+          });
+          orchestrationNotes = agentResult.text;
+          actualModelUsed = `${agentResult.actualProvider} (${agentResult.actualModel})`;
+          const latestRun = executionStore.getRun(runId);
+          if (latestRun) {
+            latestRun.metrics.totalTokensUsed += agentResult.tokensUsed || 0;
+            executionStore.saveRun(latestRun);
           }
+        } catch (error: any) {
+          eventBus.emit(projectId, runId, 'log:info', {
+            agentName: 'Aria CEO',
+            level: 'warning',
+            message: `Free-model planning call failed; deterministic prompt classification remains active: ${redactSecrets(error?.message || String(error))}`,
+          }, { agentId: 'ag_ceo' });
         }
 
         this.recordCommunication(runId, projectId, {
@@ -1376,10 +1384,17 @@ class MultiAgentOrchestrator {
         });
 
         this.updateAgentState(project, runId, 'ag_ceo', {
+          status: 'waiting',
+          validationStatus: 'validated',
+          currentTask: 'Plan complete; delegated implementation to Parker and downstream agents',
+          modelUsed: actualModelUsed,
           generatedArtifact: `9-Stage DAG & ${features.length}-Feature Coverage Map`,
+        }, {
+          message: `Planning complete. Delegated ${features.length} mapped requirements to Parker; Aria is waiting for the final verification gate.`,
+          type: 'success',
         });
 
-        return { classification, features, workspace: structRec.output, geminiNotes };
+        return { classification, features, workspace: structRec.output, orchestrationNotes };
       }
 
       // ---------------------------------------------------------
