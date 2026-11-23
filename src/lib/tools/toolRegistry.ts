@@ -916,23 +916,34 @@ const registryEntries: RegisteredTool[] = [
         return { output: { executed: false, installed: false, reason: 'package.json declares no dependencies.' } };
       }
       const hasLock = fs.existsSync(path.join(root, 'package-lock.json'));
-      const npmArgs = hasLock
+      const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+      const runNpm = (npmArgs: string[]) => runSandboxedProcess(
+        command,
+        process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', ...npmArgs] : npmArgs,
+        root,
+        { timeoutMs: 180000, abortSignal: ctx.abortSignal }
+      );
+      let npmArgs = hasLock
         ? ['ci', '--ignore-scripts', '--no-audit', '--no-fund']
         : ['install', '--ignore-scripts', '--no-audit', '--no-fund'];
-      const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
-      const args = process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', ...npmArgs] : npmArgs;
-      const result = await runSandboxedProcess(command, args, root, {
-        timeoutMs: 180000,
-        abortSignal: ctx.abortSignal,
-      });
+      let result = await runNpm(npmArgs);
+      let lockfileFallback = false;
+      // Generated manifests and older lockfiles can drift. Recover with npm install
+      // rather than leaving the project stuck on a stale package-lock.json.
+      if (result.exitCode !== 0 && hasLock) {
+        lockfileFallback = true;
+        npmArgs = ['install', '--ignore-scripts', '--no-audit', '--no-fund'];
+        result = await runNpm(npmArgs);
+      }
       const installed = result.exitCode === 0 && fs.existsSync(path.join(root, 'node_modules'));
       return {
         output: {
           executed: true,
           installed,
-          command: `npm ${args.join(' ')}`,
+          command: `npm ${npmArgs.join(' ')}`,
           exitCode: result.exitCode,
           lockfileUsed: hasLock,
+          lockfileFallback,
         },
         stdout: result.stdout,
         stderr: result.stderr,
