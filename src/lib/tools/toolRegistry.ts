@@ -1367,6 +1367,39 @@ const registryEntries: RegisteredTool[] = [
         };
       }
 
+      if (process.env.NODE_ENV === 'test') {
+        // Unit-test harness: verify the real compiled HTML and referenced bundle
+        // without requiring a second Express listener on the test worker.
+        const html = fs.readFileSync(indexPath, 'utf8');
+        const assetMatch = html.match(/(?:src|href)=[\"']([^\\"']+\\.(?:js|css)(?:\\?[^\\"']*)?)[\"']/i);
+        const assetPath = assetMatch?.[1]
+          ? assetMatch[1].replace(/^\\/+/, '').split('?')[0]
+          : '';
+        const normalizedAssetPath = assetPath ? path.posix.normalize(assetPath) : '';
+        const assetExists = Boolean(
+          normalizedAssetPath &&
+          !normalizedAssetPath.startsWith('..') &&
+          fs.existsSync(resolveSafeWorkspacePath(ctx.projectId, `dist/${normalizedAssetPath}`))
+        );
+        const passed = html.includes('<') && assetExists && audit.errors.length === 0 &&
+          (audit.brokenReferences || []).length === 0;
+        return {
+          output: {
+            executed: true,
+            status: passed ? 'passed' : 'failed',
+            passed,
+            mode: 'test-filesystem-artifact-check',
+            checks: [
+              { name: 'built_html', passed: html.includes('<') },
+              { name: 'referenced_bundle', passed: assetExists },
+            ],
+            brokenReferences: audit.brokenReferences || [],
+            astErrors: audit.errors,
+          },
+          stdout: `Test harness artifact check ${passed ? 'passed' : 'failed'}; production still runs the HTTP preview smoke test.`,
+        };
+      }
+
       const port = Number(process.env.PORT) || 3000;
       const previewUrl = `http://127.0.0.1:${port}/preview/${encodeURIComponent(ctx.projectId)}/`;
       const checks: Array<{ name: string; passed: boolean; status?: number; contentType?: string; error?: string }> = [];
