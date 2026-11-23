@@ -31,7 +31,7 @@ export const PROVIDER_MODEL_CATALOG: Record<AgentProvider, ProviderModelCatalogE
     { id: 'particle-ai/particle-1:free', label: 'Particle-1 (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'dots-studio/dots-3-note-preview:free', label: 'Dots 3 Note Preview (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'inclusionai/ling-3.2-flash:free', label: 'Ling 3.2 Flash (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
-    { id: 'cohere/north-mini-code:free', label: 'Cohere North Mini Code (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
+    { id: 'nvidia/nemotron-3.5-super-vl:free', label: 'Cohere North Mini Code (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'recursive/flint-v1.0:free', label: 'Recursive Flint (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'openrouter/free', label: 'OpenRouter Free Auto Router', provider: 'openrouter', maxOutputTokens: 8192, available: true },
   ],
@@ -65,7 +65,7 @@ export const AGENT_ROSTER: Record<AgentRosterEntry['key'], AgentRosterEntry> = {
   frank: {
     id: 'ag_fe', key: 'frank', name: 'Frank Lead',
     role: 'Senior Frontend Engineer', provider: 'openrouter',
-    defaultModel: 'cohere/north-mini-code:free',
+    defaultModel: 'nvidia/nemotron-3.5-super-vl:free',
     fallbackModels: ['recursive/flint-v1.0:free', 'particle-ai/particle-1:free', 'openrouter/free'],
     availability: 'verified',
   },
