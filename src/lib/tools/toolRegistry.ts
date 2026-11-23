@@ -1371,9 +1371,9 @@ const registryEntries: RegisteredTool[] = [
         // Unit-test harness: verify the real compiled HTML and referenced bundle
         // without requiring a second Express listener on the test worker.
         const html = fs.readFileSync(indexPath, 'utf8');
-        const assetMatch = html.match(/(?:src|href)=[\"']([^\\"']+\\.(?:js|css)(?:\\?[^\\"']*)?)[\"']/i);
+        const assetMatch = html.match(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/i);
         const assetPath = assetMatch?.[1]
-          ? assetMatch[1].replace(/^\\/+/, '').split('?')[0]
+          ? assetMatch[1].replace(/^\/+/, '').split('?')[0]
           : '';
         const normalizedAssetPath = assetPath ? path.posix.normalize(assetPath) : '';
         const assetExists = Boolean(
@@ -1412,7 +1412,7 @@ const registryEntries: RegisteredTool[] = [
           return { output: { executed: true, status: 'failed', passed: false, previewUrl, checks, reason: 'Preview route did not return a valid HTML document.' }, stderr: html.slice(0, 1000) };
         }
 
-        const assetMatch = html.match(/(?:src|href)=[\"']([^\\"']+\.(?:js|css)(?:\?[^\\"']*)?)[\"']/i);
+        const assetMatch = html.match(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/i);
         if (assetMatch?.[1]) {
           const assetUrl = new URL(assetMatch[1], previewUrl).toString();
           const asset = await fetch(assetUrl, { signal: AbortSignal.timeout(10000) });
