@@ -37,25 +37,6 @@ function decodeFields(fields: Record<string, any>): Record<string, any> {
   return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, decodeValue(value)]));
 }
 
-function encodeValue(value: any): any {
-  if (value === null || value === undefined) return { nullValue: null };
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number') return Number.isInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(encodeValue) } };
-  if (value instanceof Date) return { timestampValue: value.toISOString() };
-  if (typeof value === 'object') return { mapValue: { fields: encodeFields(value) } };
-  return { stringValue: String(value) };
-}
-
-function encodeFields(value: Record<string, any>): Record<string, any> {
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key, item]) => Boolean(key) && item !== undefined)
-      .map(([key, item]) => [key, encodeValue(item)])
-  );
-}
-
 let cachedAccessToken: { token: string; expiresAt: number } | null = null;
 
 async function getCloudRunAccessToken(): Promise<string> {
