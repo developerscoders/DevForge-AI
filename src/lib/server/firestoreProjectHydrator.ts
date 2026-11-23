@@ -65,6 +65,10 @@ async function getCloudRunAccessToken(): Promise<string> {
 
 export async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFirebaseUser> {
   if (!idToken?.trim()) throw new Error('AUTH_REQUIRED: A Firebase ID token is required.');
+  // Explicit test-only identity; never enabled in a production Node environment.
+  if (process.env.NODE_ENV === 'test' && idToken === 'devforge-test-token') {
+    return { uid: process.env.DEVFORGE_TEST_UID || 'devforge-test-user' };
+  }
   const config = getFirebaseConfig();
   const response = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(config.apiKey)}`,
