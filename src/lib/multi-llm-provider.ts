@@ -782,7 +782,7 @@ export function getProviderConfigStatus() {
       models: PROVIDER_MODEL_CATALOG.openrouter.map((m) => m.id),
       modelCatalog: PROVIDER_MODEL_CATALOG.openrouter,
       role: 'PRD, Architecture & Frontend Code Synthesis',
-      latencyEstimate: openrouterConfigured ? '350ms' : 'Fallback to Gemini',
+      latencyEstimate: openrouterConfigured ? '350ms' : 'Free-model routing unavailable (configure OPENROUTER_API_KEY)',
     },
     nvidia: {
       configured: nvidiaConfigured,
