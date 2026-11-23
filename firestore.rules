@@ -21,34 +21,26 @@ service cloud.firestore {
     match /cms_pages/{pageId} { allow read: if true; allow write: if isAdmin(); }
 
     match /projects/{projectId} {
+      function projectOwner() {
+        return signedIn() &&
+          get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
+      }
       allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
       allow read, update, delete: if signedIn() && resource.data.userId == request.auth.uid;
 
       // Generated source files are stored one document per path to avoid the
       // Firestore 1 MiB document-size limit on large projects.
       match /files/{fileId} {
-        function projectOwner() {
-          return signedIn() &&
-            get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
-        }
         allow read, create, update, delete: if projectOwner();
       }
 
       // Execution snapshots and individual tool records are separate documents
       // so a large run cannot overflow the parent project document's 1 MiB limit.
       match /runs/{runId} {
-        function projectOwner() {
-          return signedIn() &&
-            get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
-        }
         allow read, create, update: if projectOwner();
         allow delete: if false;
 
         match /tools/{toolId} {
-          function projectOwner() {
-            return signedIn() &&
-              get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
-          }
           allow read, create, update: if projectOwner();
           allow delete: if false;
         }
