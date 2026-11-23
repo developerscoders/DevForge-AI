@@ -51,7 +51,12 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
     expect(AGENT_ROSTER.frank.provider).toBe('openrouter');
     expect(AGENT_ROSTER.frank.availability).toBe('verified');
     expect(AGENT_ROSTER.frank.defaultModel).toBe(DEFAULT_MODEL_CONFIG['Frontend Engineer']);
-    expect(AGENT_ROSTER.parker.defaultModel).toBe('meta-llama/llama-3.2-1b-instruct');
+    expect(AGENT_ROSTER.parker.defaultModel).toBe('inclusionai/ling-3.2-flash:free');
+    for (const agent of Object.values(AGENT_ROSTER)) {
+      expect(agent.provider).toBe('openrouter');
+      expect(agent.defaultModel === 'openrouter/free' || agent.defaultModel.endsWith(':free')).toBe(true);
+      expect(agent.fallbackModels.every((model) => model === 'openrouter/free' || model.endsWith(':free'))).toBe(true);
+    }
     expect(PROVIDER_MODEL_CATALOG.nvidia.every((m) => !m.available)).toBe(true);
   });
 
