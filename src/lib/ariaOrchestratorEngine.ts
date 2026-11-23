@@ -20,7 +20,7 @@ every fact; never assume or narrate a result you haven't actually fetched.
 | Parker | Product Manager | OpenRouter | inclusionai/ling-3.2-flash:free | baidu/ernie-5.5-flash-preview:free, nvidia/nemotron-3.5-lightning:free, openrouter/free |
 | Sophia | Solution Architect | OpenRouter | nvidia/nemotron-3-ultra-550b-a55b:free | baidu/ernie-5.5-flash-preview:free, inclusionai/ling-3.2-flash:free, openrouter/free |
 | Frank | Frontend Engineer | OpenRouter | particle-ai/particle-1:free | recursive/flint-v1.0:free, nvidia/nemotron-3.5-super-vl:free, openrouter/free |
-| Quinn | QA & Security Lead | OpenRouter | dots-studio/dots-3-note-preview:free | baidu/ernie-5.5-flash-preview:free, nvidia/nemotron-3.5-lightning:free, openrouter/free |
+| Quinn | QA & Security Lead | OpenRouter | nvidia/nemotron-3.5-super-vl:free | baidu/ernie-5.5-flash-preview:free, nvidia/nemotron-3.5-lightning:free, openrouter/free |
 | Devon | DevOps & SRE Lead | OpenRouter | nvidia/nemotron-3.5-lightning:free | nvidia/nemotron-3-ultra-550b-a55b:free, baidu/ernie-5.5-flash-preview:free, openrouter/free |
 
 All primary and fallback model IDs must be free variants. Never silently fall back to Gemini, Groq paid models, NVIDIA paid models, or any model without an explicit free endpoint. Record the actual model ID returned by the provider, not only the requested model. Free endpoints are rate-limited; on 429/404/provider errors, try the next explicitly free model and finally openrouter/free. Never claim a model ran unless the provider response confirms it.
