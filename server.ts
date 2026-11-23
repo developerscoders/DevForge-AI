@@ -8,7 +8,7 @@ import { PaymentProviderRegistry } from './src/lib/payment-abstraction.js';
 import { db as firestoreDb, auth as firestoreAuth } from './src/lib/firebase.js';
 import { collection as firestoreCollection, getDocs as firestoreGetDocs, doc as firestoreDoc, getDoc as firestoreGetDoc, setDoc as firestoreSetDoc } from 'firebase/firestore';
 import { callMultiProviderLLM, getProviderConfigStatus } from './src/lib/multi-llm-provider.js';
-import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG } from './src/config/agentRoster.js';
+import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG, normalizeFreeModelConfig } from './src/config/agentRoster.js';
 import { classifyProjectPrompt } from './src/config/outputContracts.js';
 import { generateFullProjectFiles } from './src/lib/projectFilesGenerator.js';
 import { pushProjectToGitHub, deployProjectToVercel, checkVercelDeploymentStatus, ensureProductionDeployFiles } from './src/lib/deployService.js';
@@ -214,6 +214,7 @@ async function findOrHydrateProjectForRequest(req: express.Request, projectId: s
 
   const remote = await loadOwnedProjectFromFirestore(projectId, idToken);
   if (!remote) return null;
+  remote.modelConfig = normalizeFreeModelConfig(remote.modelConfig || {});
   executionStore.saveProject(remote);
   if (remote.lastExecutionRun?.runId) {
     const recoveredRun = { ...remote.lastExecutionRun };
@@ -601,10 +602,10 @@ app.post('/api/projects', async (req, res) => {
       .replace(/[^a-zA-Z0-9\s-]/g, '')
       .trim() || 'Autonomous Application';
 
-  const resolvedModelConfig = {
+  const resolvedModelConfig = normalizeFreeModelConfig({
     ...DEFAULT_MODEL_CONFIG,
     ...(modelConfig && typeof modelConfig === 'object' ? modelConfig : {}),
-  };
+  });
 
   const initialProject: any = {
     id: projectId,
