@@ -892,9 +892,56 @@ const registryEntries: RegisteredTool[] = [
     },
   },
   {
+    name: 'install_dependencies',
+    category: 'terminal',
+    description: 'Install the generated project dependencies in its isolated workspace using npm ci/install with lifecycle scripts disabled.',
+    zodSchema: z.object({}),
+    geminiParameters: { type: Type.OBJECT, properties: {} },
+    allowedAgents: ['ag_ceo', 'ag_fe', 'ag_coder', 'ag_qa', 'ag_sre'],
+    availabilityCheck: async () => ({ available: true, configured: true }),
+    execute: async (_args, ctx) => {
+      const root = ensureWorkspaceSeeded(ctx.projectId);
+      const packagePath = resolveSafeWorkspacePath(ctx.projectId, 'package.json');
+      if (!fs.existsSync(packagePath)) {
+        return { output: { executed: false, installed: false, reason: 'package.json is missing; no dependency manifest exists.' } };
+      }
+      let pkg: any;
+      try {
+        pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      } catch (error: any) {
+        throw new Error(`Invalid package.json: ${error?.message || 'JSON parse failed'}`);
+      }
+      const hasDependencies = Object.keys({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) }).length > 0;
+      if (!hasDependencies) {
+        return { output: { executed: false, installed: false, reason: 'package.json declares no dependencies.' } };
+      }
+      const hasLock = fs.existsSync(path.join(root, 'package-lock.json'));
+      const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+      const args = hasLock
+        ? ['ci', '--ignore-scripts', '--no-audit', '--no-fund']
+        : ['install', '--ignore-scripts', '--no-audit', '--no-fund'];
+      const result = await runSandboxedProcess(command, args, root, {
+        timeoutMs: 180000,
+        abortSignal: ctx.abortSignal,
+      });
+      const installed = result.exitCode === 0 && fs.existsSync(path.join(root, 'node_modules'));
+      return {
+        output: {
+          executed: true,
+          installed,
+          command: `npm ${args.join(' ')}`,
+          exitCode: result.exitCode,
+          lockfileUsed: hasLock,
+        },
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+    },
+  },
+  {
     name: 'run_build',
     category: 'terminal',
-    description: 'Validate build configuration (package.json, vite.config, index.html, Dockerfile) and run workspace build if installed.',
+    description: 'Execute the generated application build script and verify that the expected build artifact exists; never substitute static preflight for a build.',
     zodSchema: z.object({}),
     geminiParameters: { type: Type.OBJECT, properties: {} },
     allowedAgents: ['ag_ceo', 'ag_fe', 'ag_coder', 'ag_sre'],
@@ -903,46 +950,46 @@ const registryEntries: RegisteredTool[] = [
       const root = ensureWorkspaceSeeded(ctx.projectId);
       const proj = executionStore.getProject(ctx.projectId);
       if (!proj) throw new Error('Project not found');
-
-      if (fs.existsSync(path.join(root, 'node_modules', '.bin', 'vite'))) {
-        const res = await runSandboxedProcess(
-          path.join(root, 'node_modules', '.bin', 'vite'),
-          ['build'],
-          root,
-          { timeoutMs: 30000, abortSignal: ctx.abortSignal }
-        );
-        return {
-          output: { executed: 'vite build', passed: res.exitCode === 0, exitCode: res.exitCode },
-          stdout: res.stdout,
-          stderr: res.stderr,
-        };
+      const packagePath = resolveSafeWorkspacePath(ctx.projectId, 'package.json');
+      if (!fs.existsSync(packagePath)) {
+        return { output: { executed: false, executedBuild: false, status: 'not_executed', passed: null, reason: 'package.json is missing.' } };
       }
-
-      const astErrors = runTypeScriptAstDiagnostics(proj);
-      const pkg = proj.files.find((f) => f.path === 'package.json');
-      const indexHtml = proj.files.find((f) => f.path === 'index.html');
+      const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      if (!pkg.scripts?.build || typeof pkg.scripts.build !== 'string') {
+        return { output: { executed: false, executedBuild: false, status: 'not_executed', passed: null, reason: 'package.json has no build script.' } };
+      }
+      const binDir = path.join(root, 'node_modules', '.bin');
+      if (!fs.existsSync(binDir)) {
+        return { output: { executed: false, executedBuild: false, status: 'not_executed', passed: null, workspaceDependenciesInstalled: false, reason: 'Dependencies are not installed. Run install_dependencies first.' } };
+      }
+      const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+      const result = await runSandboxedProcess(command, ['run', 'build'], root, {
+        timeoutMs: 180000,
+        abortSignal: ctx.abortSignal,
+      });
+      const candidates = ['dist/index.html', 'build/index.html', 'out/index.html', '.next/BUILD_ID'];
+      const artifacts = candidates.filter((rel) => fs.existsSync(path.join(root, rel)));
+      const hasFrontendArtifact = artifacts.some((rel) => rel.endsWith('index.html'));
       const requiresFrontend = proj.projectClassification?.requires_frontend !== false;
-      const missing: string[] = [];
-      if (!pkg) missing.push('package.json');
-      if (requiresFrontend && !indexHtml) missing.push('index.html');
-
+      const passed = result.exitCode === 0 && (!requiresFrontend || hasFrontendArtifact);
       return {
         output: {
-          executed: false,
-          executedBuild: false,
-          status: 'preflight_only',
-          passed: null,
-          workspaceDependenciesInstalled: false,
-          preflightPassed: astErrors.length === 0 && missing.length === 0,
-          missingArtifacts: missing,
-          astErrors,
-          reason: 'Dependencies are not installed. Configuration and AST checks do not prove that the application builds.',
+          executed: true,
+          executedBuild: true,
+          status: passed ? 'built' : 'failed',
+          passed,
+          exitCode: result.exitCode,
+          buildScript: pkg.scripts.build,
+          artifacts,
+          previewReady: artifacts.some((rel) => ['dist/index.html', 'build/index.html', 'out/index.html'].includes(rel)),
+          reason: result.exitCode !== 0
+            ? 'The real npm build command failed.'
+            : requiresFrontend && !hasFrontendArtifact
+              ? 'Build command exited successfully but no static frontend entrypoint was produced.'
+              : undefined,
         },
-        stdout:
-          astErrors.length === 0 && missing.length === 0
-            ? 'Build preflight only: entrypoints and AST syntax inspected. No compiler/bundler was executed.'
-            : undefined,
-        stderr: [...missing.map((m) => `Missing ${m}`), ...astErrors].join('\n') || undefined,
+        stdout: result.stdout,
+        stderr: result.stderr,
       };
     },
   },
