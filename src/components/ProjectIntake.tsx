@@ -104,7 +104,7 @@ export default function ProjectIntake({ onSubmit }: ProjectIntakeProps) {
       { label: 'OpenRouter Free Auto Router', value: 'openrouter/free', provider: 'openrouter' },
     ],
     'Frontend Engineer': [
-      { label: 'Cohere North Mini Code (Free · Coding)', value: 'cohere/north-mini-code:free', provider: 'openrouter' },
+      { label: 'Nemotron 3.5 Super VL (Free · Multimodal Coding)', value: 'nvidia/nemotron-3.5-super-vl:free', provider: 'openrouter' },
       { label: 'Recursive Flint (Free · Coding)', value: 'recursive/flint-v1.0:free', provider: 'openrouter' },
       { label: 'Particle-1 (Free · Coding)', value: 'particle-ai/particle-1:free', provider: 'openrouter' },
       { label: 'OpenRouter Free Auto Router', value: 'openrouter/free', provider: 'openrouter' },
