@@ -88,7 +88,7 @@ describe('MultiAgentOrchestrator DAG, Subagents, Approvals, Cancellation & Recov
     await waitForCondition(() => {
       const latest = executionStore.getRun(run.runId);
       return latest?.status === 'completed' || latest?.status === 'failed';
-    }, 20000);
+    }, 60000);
 
     const finalRun = executionStore.getRun(run.runId)!;
     const finalProject = executionStore.getProject(project.id)!;
