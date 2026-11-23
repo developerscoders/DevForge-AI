@@ -98,6 +98,7 @@ export default function ProjectView({
   const lastSeqRef = useRef<number>(0);
   const hasSavedCompleteRef = useRef<boolean>(false);
   const lastSavedFilesSnapshotRef = useRef<string>('');
+  const lastSavedRunSnapshotRef = useRef<string>('');
 
   // 1. Initial Load from Props, Firestore, or Server
   useEffect(() => {
@@ -214,12 +215,15 @@ export default function ProjectView({
           content: file.content,
         })));
         const filesChanged = filesSnapshot !== lastSavedFilesSnapshotRef.current;
+        const runSnapshot = JSON.stringify(run || null);
+        const runChanged = runSnapshot !== lastSavedRunSnapshotRef.current;
         const statusChanged = Boolean(data.status && lastSavedStatusRef.current !== data.status);
         const completionChanged = allAgentsComplete && !hasSavedCompleteRef.current;
-        if (user && (statusChanged || completionChanged || filesChanged)) {
+        if (user && (statusChanged || completionChanged || filesChanged || runChanged)) {
           await saveFirestoreProject(data, user.uid);
           lastSavedStatusRef.current = data.status;
           lastSavedFilesSnapshotRef.current = filesSnapshot;
+          lastSavedRunSnapshotRef.current = runSnapshot;
           if (allAgentsComplete) hasSavedCompleteRef.current = true;
           if (onProjectUpdated) onProjectUpdated(data);
         }
