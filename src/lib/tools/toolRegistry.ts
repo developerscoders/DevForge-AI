@@ -971,7 +971,7 @@ const registryEntries: RegisteredTool[] = [
       });
       const candidates = ['dist/index.html', 'build/index.html', 'out/index.html', '.next/BUILD_ID'];
       const artifacts = candidates.filter((rel) => fs.existsSync(path.join(root, rel)));
-      const hasFrontendArtifact = artifacts.some((rel) => rel.endsWith('index.html'));
+      const hasFrontendArtifact = artifacts.includes('dist/index.html');
       const requiresFrontend = proj.projectClassification?.requires_frontend !== false;
       const passed = result.exitCode === 0 && (!requiresFrontend || hasFrontendArtifact);
       return {
@@ -983,7 +983,7 @@ const registryEntries: RegisteredTool[] = [
           exitCode: result.exitCode,
           buildScript: pkg.scripts.build,
           artifacts,
-          previewReady: artifacts.some((rel) => ['dist/index.html', 'build/index.html', 'out/index.html'].includes(rel)),
+          previewReady: artifacts.includes('dist/index.html'),
           reason: result.exitCode !== 0
             ? 'The real npm build command failed.'
             : requiresFrontend && !hasFrontendArtifact
