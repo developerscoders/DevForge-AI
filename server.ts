@@ -21,6 +21,7 @@ import {
   delegateMilestoneWithFallback,
 } from './src/lib/ariaOrchestratorEngine.js';
 import { executionStore } from './src/lib/orchestrator/executionStore.js';
+import { loadOwnedProjectFromFirestore, verifyFirebaseIdToken } from './src/lib/server/firestoreProjectHydrator.js';
 import { eventBus } from './src/lib/orchestrator/eventBus.js';
 import {
   orchestratorEngine,
@@ -194,6 +195,59 @@ function findOrHydrateProject(projectId: string) {
   return proj;
 }
 
+function getBearerToken(req: express.Request): string {
+  const header = String(req.headers.authorization || '');
+  return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+}
+
+async function findOrHydrateProjectForRequest(req: express.Request, projectId: string) {
+  const idToken = getBearerToken(req);
+  if (!idToken) throw new Error('AUTH_REQUIRED: Sign in to access this project.');
+  const user = await verifyFirebaseIdToken(idToken);
+  const local = findOrHydrateProject(projectId);
+  if (local) {
+    if (!local.userId || local.userId !== user.uid) {
+      throw new Error('PROJECT_FORBIDDEN: This project does not belong to the authenticated Firebase user.');
+    }
+    return local;
+  }
+
+  const remote = await loadOwnedProjectFromFirestore(projectId, idToken);
+  if (!remote) return null;
+  executionStore.saveProject(remote);
+  if (remote.lastExecutionRun?.runId) {
+    const recoveredRun = { ...remote.lastExecutionRun };
+    if (recoveredRun.status === 'running' || recoveredRun.status === 'queued' || recoveredRun.status === 'awaiting_approval') {
+      const now = new Date().toISOString();
+      recoveredRun.status = 'failed';
+      recoveredRun.completedAt = now;
+      recoveredRun.recoveredFromRestart = true;
+      recoveredRun.error = 'Execution was interrupted when the previous server instance stopped. Rebuild to resume.';
+      for (const task of recoveredRun.tasks || []) {
+        if (['running', 'pending', 'blocked', 'awaiting_approval'].includes(task.status)) {
+          task.status = 'failed';
+          task.completedAt = now;
+          task.error = 'Interrupted by server instance restart';
+        }
+      }
+    }
+    executionStore.saveRun(recoveredRun);
+    remote.lastExecutionRun = recoveredRun;
+  }
+  db.projects.push(remote);
+  return remote;
+}
+
+function sendProjectHydrationError(res: express.Response, error: any) {
+  const message = String(error?.message || error || 'Project hydration failed');
+  const status =
+    message.startsWith('AUTH_REQUIRED') || message.startsWith('AUTH_INVALID') ? 401 :
+    message.startsWith('PROJECT_FORBIDDEN') ? 403 :
+    message.startsWith('FIRESTORE_PERMISSION_DENIED') ? 503 :
+    message.startsWith('FIRESTORE_ADC_UNAVAILABLE') ? 503 : 500;
+  return res.status(status).json({ error: message, code: message.split(':')[0] || 'PROJECT_HYDRATION_FAILED' });
+}
+
 // Express Endpoints
 
 // 0. Platform Health Check
@@ -213,14 +267,15 @@ app.get('/api/projects', (req, res) => {
   res.json(merged);
 });
 
-app.get('/api/projects/:id', (req, res) => {
-  const project = findOrHydrateProject(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Project not found in server memory', id: req.params.id });
-  const latestRun = executionStore.getLatestRunForProject(project.id);
-  res.json({
-    ...project,
-    lastExecutionRun: latestRun || project.lastExecutionRun,
-  });
+app.get('/api/projects/:id', async (req, res) => {
+  try {
+    const project = await findOrHydrateProjectForRequest(req, req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found in Firestore', id: req.params.id });
+    const latestRun = executionStore.getLatestRunForProject(project.id);
+    return res.json({ ...project, lastExecutionRun: latestRun || project.lastExecutionRun });
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
+  }
 });
 
 app.delete('/api/projects/:id', (req, res) => {
@@ -804,41 +859,32 @@ app.post('/api/projects/:id/approvals/:approvalId/resolve', (req, res) => {
 });
 
 // 10. Full Execution Run Inspection Endpoint
-app.get('/api/projects/:id/execution', (req, res) => {
-  const project = findOrHydrateProject(req.params.id);
-  if (!project) {
-    return res.status(404).json({ error: 'Project not found' });
+app.get('/api/projects/:id/execution', async (req, res) => {
+  try {
+    const project = await findOrHydrateProjectForRequest(req, req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found in Firestore', id: req.params.id });
+    const run = executionStore.getLatestRunForProject(req.params.id) || project.lastExecutionRun || null;
+    const runs = executionStore.getRunsForProject(req.params.id);
+    const events = executionStore.getEvents(req.params.id, Number(req.query.sinceSeq || 0));
+    const pendingApprovals = (run?.approvals || []).filter((a) => a.status === 'pending');
+    return res.json({ project, run, runsCount: runs.length, events, pendingApprovals });
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
   }
-  const run = executionStore.getLatestRunForProject(req.params.id) || project.lastExecutionRun || null;
-  const runs = executionStore.getRunsForProject(req.params.id);
-  const events = executionStore.getEvents(req.params.id, Number(req.query.sinceSeq || 0));
-  const pendingApprovals = (run?.approvals || []).filter((a) => a.status === 'pending');
-
-  res.json({
-    project,
-    run,
-    runsCount: runs.length,
-    events,
-    pendingApprovals,
-  });
 });
 
 // 11. Project Tool Invocations & Registry Availability
 app.get('/api/projects/:id/tools', async (req, res) => {
-  const project = findOrHydrateProject(req.params.id);
-  if (!project) {
-    return res.status(404).json({ error: 'Project not found' });
+  try {
+    const project = await findOrHydrateProjectForRequest(req, req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found in Firestore' });
+    const run = executionStore.getLatestRunForProject(req.params.id) || project.lastExecutionRun;
+    const toolsStatus = await getAllToolsAvailabilityStatus();
+    const executions = run?.toolExecutions || [];
+    return res.json({ projectId: req.params.id, runId: run?.runId || null, total: executions.length, toolExecutions: executions, toolsStatus });
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
   }
-  const run = executionStore.getLatestRunForProject(req.params.id);
-  const toolsStatus = await getAllToolsAvailabilityStatus();
-  const executions = run?.toolExecutions || [];
-  res.json({
-    projectId: req.params.id,
-    runId: run?.runId || null,
-    total: executions.length,
-    toolExecutions: executions,
-    toolsStatus,
-  });
 });
 
 // 12. Real-Time Ordered SSE Stream (supports Last-Event-ID / ?sinceSeq= replay)
