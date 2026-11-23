@@ -165,7 +165,7 @@ export default function LiveSwarmGenerationTracker({
             <div className="absolute top-0 right-0 w-32 h-32 bg-violet-600/10 rounded-full blur-2xl pointer-events-none" />
             <div className="flex items-center justify-between text-xs font-mono text-violet-400 mb-3">
               <span className="flex items-center gap-1.5 font-bold uppercase tracking-wider">
-                <Bot size={14} /> Currently Executing
+                <Bot size={14} /> {runCompleted ? 'Execution Complete' : runFailed ? 'Execution Failed' : runCancelled ? 'Execution Cancelled' : currentAgent ? 'Currently Executing' : 'Waiting for Agent'}
               </span>
               <span className="text-[10px] bg-violet-500/20 border border-violet-500/40 text-violet-300 px-2 py-0.5 rounded-full">
                 {currentAgent ? `${currentAgent.tier || 'Lead'} Tier` : runCompleted ? 'All agents complete' : 'No active agent'}
@@ -173,11 +173,17 @@ export default function LiveSwarmGenerationTracker({
             </div>
 
             <div className="flex items-center gap-3.5 mb-3">
-              <img
-                src={currentAgent?.avatar || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=80&fit=crop&q=60'}
-                alt={currentAgent?.name || 'Agent'}
-                className="w-12 h-12 rounded-xl object-cover border border-violet-400/40 shadow"
-              />
+              {currentAgent?.avatar ? (
+                <img
+                  src={currentAgent.avatar}
+                  alt={currentAgent.name}
+                  className="w-12 h-12 rounded-xl object-cover border border-violet-400/40 shadow"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center text-slate-400">
+                  {runCompleted ? <CheckCircle2 size={22} /> : runFailed ? <AlertTriangle size={22} /> : <Bot size={22} />}
+                </div>
+              )}
               <div>
                 <h3 className="text-base font-bold text-white">{currentAgent?.name || 'Swarm Lead'}</h3>
                 <p className="text-xs text-slate-400">{currentAgent?.role || 'Autonomous Engineer'}</p>
