@@ -916,10 +916,11 @@ const registryEntries: RegisteredTool[] = [
         return { output: { executed: false, installed: false, reason: 'package.json declares no dependencies.' } };
       }
       const hasLock = fs.existsSync(path.join(root, 'package-lock.json'));
-      const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-      const args = hasLock
+      const npmArgs = hasLock
         ? ['ci', '--ignore-scripts', '--no-audit', '--no-fund']
         : ['install', '--ignore-scripts', '--no-audit', '--no-fund'];
+      const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+      const args = process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', ...npmArgs] : npmArgs;
       const result = await runSandboxedProcess(command, args, root, {
         timeoutMs: 180000,
         abortSignal: ctx.abortSignal,
@@ -962,8 +963,9 @@ const registryEntries: RegisteredTool[] = [
       if (!fs.existsSync(binDir)) {
         return { output: { executed: false, executedBuild: false, status: 'not_executed', passed: null, workspaceDependenciesInstalled: false, reason: 'Dependencies are not installed. Run install_dependencies first.' } };
       }
-      const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-      const result = await runSandboxedProcess(command, ['run', 'build'], root, {
+      const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+      const buildArgs = process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', 'run', 'build'] : ['run', 'build'];
+      const result = await runSandboxedProcess(command, buildArgs, root, {
         timeoutMs: 180000,
         abortSignal: ctx.abortSignal,
       });
@@ -1325,21 +1327,79 @@ const registryEntries: RegisteredTool[] = [
     allowedAgents: ['ag_ceo', 'ag_arch', 'ag_qa', 'ag_sre'],
     availabilityCheck: async () => ({ available: true, configured: true }),
     execute: async (_args, ctx) => {
-      ensureWorkspaceSeeded(ctx.projectId);
+      const root = ensureWorkspaceSeeded(ctx.projectId);
       const proj = executionStore.getProject(ctx.projectId);
       if (!proj) throw new Error('Project not found');
       const astDiagnostics = runTypeScriptAstDiagnostics(proj);
       const audit = runAstAudit(proj, astDiagnostics);
-      return {
-        output: {
-          passed: audit.passed && audit.brokenReferences?.length === 0,
-          brokenReferences: audit.brokenReferences || [],
-          astErrors: audit.errors,
-          securityAlerts: audit.securityAlerts,
-          port3000Configured: audit.port3000Configured,
-        },
-        stdout: `Integration check finished: ${(audit.brokenReferences || []).length} broken route reference(s), ${audit.securityAlerts} security alert(s).`,
-      };
+      const indexPath = resolveSafeWorkspacePath(ctx.projectId, 'dist/index.html');
+      if (proj.projectClassification?.requires_frontend === false) {
+        return {
+          output: {
+            executed: false,
+            status: 'not_executed',
+            passed: null,
+            reason: 'Browser preview smoke test is not applicable to a headless project; add an explicit integration test script for its runtime.',
+            brokenReferences: audit.brokenReferences || [],
+            astErrors: audit.errors,
+          },
+        };
+      }
+      if (!fs.existsSync(indexPath)) {
+        return {
+          output: {
+            executed: false,
+            status: 'not_executed',
+            passed: null,
+            reason: 'No successful dist/index.html exists. The real build must finish before preview integration checks.',
+          },
+        };
+      }
+
+      const port = Number(process.env.PORT) || 3000;
+      const previewUrl = `http://127.0.0.1:${port}/preview/${encodeURIComponent(ctx.projectId)}/`;
+      const checks: Array<{ name: string; passed: boolean; status?: number; contentType?: string; error?: string }> = [];
+      try {
+        const page = await fetch(previewUrl, { signal: AbortSignal.timeout(10000) });
+        const html = await page.text();
+        const htmlOk = page.ok && /text\/html/i.test(page.headers.get('content-type') || '') && html.includes('<');
+        checks.push({ name: 'preview_html', passed: htmlOk, status: page.status, contentType: page.headers.get('content-type') || undefined });
+        if (!htmlOk) {
+          return { output: { executed: true, status: 'failed', passed: false, previewUrl, checks, reason: 'Preview route did not return a valid HTML document.' }, stderr: html.slice(0, 1000) };
+        }
+
+        const assetMatch = html.match(/(?:src|href)=[\"']([^\\"']+\.(?:js|css)(?:\?[^\\"']*)?)[\"']/i);
+        if (assetMatch?.[1]) {
+          const assetUrl = new URL(assetMatch[1], previewUrl).toString();
+          const asset = await fetch(assetUrl, { signal: AbortSignal.timeout(10000) });
+          const assetBody = await asset.text();
+          const assetOk = asset.ok && assetBody.length > 0;
+          checks.push({ name: 'first_bundled_asset', passed: assetOk, status: asset.status, contentType: asset.headers.get('content-type') || undefined });
+        } else {
+          checks.push({ name: 'first_bundled_asset', passed: false, error: 'No local JavaScript or CSS bundle reference was found in preview HTML.' });
+        }
+
+        const passed = checks.every((check) => check.passed) && audit.errors.length === 0 && (audit.brokenReferences || []).length === 0;
+        return {
+          output: {
+            executed: true,
+            status: passed ? 'passed' : 'failed',
+            passed,
+            previewUrl,
+            checks,
+            brokenReferences: audit.brokenReferences || [],
+            astErrors: audit.errors,
+            securityAlerts: audit.securityAlerts,
+          },
+          stdout: `Preview integration smoke test ${passed ? 'passed' : 'failed'}: ${checks.map((check) => `${check.name}=${check.passed ? 'ok' : 'failed'}`).join(', ')}.`,
+          stderr: passed ? undefined : checks.filter((check) => !check.passed).map((check) => check.error || check.name).join('; '),
+        };
+      } catch (error: any) {
+        return {
+          output: { executed: true, status: 'failed', passed: false, previewUrl, checks, error: error?.message || String(error) },
+          stderr: error?.message || String(error),
+        };
+      }
     },
   },
   {
