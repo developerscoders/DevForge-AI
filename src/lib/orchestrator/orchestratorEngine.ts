@@ -2061,8 +2061,18 @@ class MultiAgentOrchestrator {
           { ...toolCtxBase, agentId: 'ag_qa', agentName: 'Quinn Lead', subagentId: subUnit.id, subagentName: subUnit.name }
         );
 
-        if (testRec.output?.syntaxErrors?.length > 0) {
-          throw new Error(`QA test suite has TypeScript syntax errors: ${testRec.output.syntaxErrors.join('; ')}`);
+        if (testRec.output?.executedRunner !== 'vitest' || testRec.output?.passed !== true) {
+          throw new Error(
+            `Unit tests were not successfully executed. Runner=${testRec.output?.executedRunner || 'none'}; reason=${testRec.output?.reason || testRec.stderr || 'No passing Vitest execution was recorded'}`
+          );
+        }
+        if (
+          executionStore.getProject(projectId)?.projectClassification?.requires_frontend !== false &&
+          (intRec.output?.executed !== true || intRec.output?.passed !== true)
+        ) {
+          throw new Error(
+            `Live preview integration verification failed or was not executed: ${intRec.output?.reason || intRec.output?.error || testRec.stderr || 'Preview HTML/bundle smoke test did not pass'}`
+          );
         }
 
         subUnit.status = 'complete';
@@ -2080,11 +2090,11 @@ class MultiAgentOrchestrator {
           {
             status: 'complete',
             validationStatus: 'validated',
-            currentTask: `Verified ${testRec.output?.testCasesCount || 0} tests (${testRec.output?.assertionsCount || 0} assertions)`,
+            currentTask: `Executed Vitest successfully (exit code ${testRec.output?.exitCode ?? 0}) and verified the live preview`,
             generatedArtifact: 'tests/app.test.ts & Integration Verification Report',
           },
           {
-            message: testRec.stdout || 'QA test verification completed cleanly.',
+            message: [testRec.stdout, intRec.stdout].filter(Boolean).join('\n') || 'QA and live preview verification completed cleanly.',
             type: 'success',
           }
         );
