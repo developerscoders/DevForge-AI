@@ -431,7 +431,7 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     if (!key) {
       attempts.push({
         provider: 'openrouter',
-        model: model || 'meta-llama/llama-3.2-1b-instruct',
+        model: model || 'openrouter/free',
         errorType: 'unconfigured',
         error: 'OPENROUTER_API_KEY is not configured',
         latencyMs: 0,
@@ -583,8 +583,10 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     }
   }
 
-  // 5. Cross-provider Gemini Core fallback (truthfully reports Gemini as actualProvider & actualModel!)
-  if (provider !== 'gemini') {
+  // 5. Cross-provider Gemini fallback is deliberately disabled for OpenRouter.
+  // DevForge's default swarm is free-only: an exhausted free route must fail visibly,
+  // never silently incur paid Gemini usage.
+  if (provider !== 'gemini' && provider !== 'openrouter') {
     const fallbackClient = options.geminiClientOverride || getGeminiClient();
     if (fallbackClient) {
       const fallbackGemModel = 'gemini-2.5-flash';
