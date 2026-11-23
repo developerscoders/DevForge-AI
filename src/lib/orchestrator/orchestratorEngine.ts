@@ -801,8 +801,8 @@ class MultiAgentOrchestrator {
       ),
       makeTask(
         'task_devon_sre',
-        'Containerization, .env.example & Build Preflight',
-        'Generate Dockerfile, docker-compose.yml, .env.example, verify port 3000 ingress, git status & build preflight.',
+        'Install Dependencies, Build & Verify Preview',
+        'Install project dependencies, execute the real npm build, verify the actual preview artifact, then inspect git status.',
         'ag_sre',
         'Devon Lead',
         ['task_sophia_backend', 'task_frank_ui'],
@@ -2159,8 +2159,8 @@ class MultiAgentOrchestrator {
           { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
         );
 
-        if (!buildRec.output?.passed) {
-          throw new Error(`Build preflight failed: ${buildRec.stderr || 'Missing required build artifacts'}`);
+        if (!buildRec.output?.passed || (executionStore.getProject(projectId)?.projectClassification?.requires_frontend !== false && buildRec.output?.previewReady !== true)) {
+          throw new Error(`Real build/preview artifact verification failed: ${buildRec.stderr || buildRec.output?.reason || 'The actual dist/index.html preview artifact is missing'}`);
         }
 
         const freshProj = executionStore.getProject(projectId)!;
@@ -2171,11 +2171,11 @@ class MultiAgentOrchestrator {
           {
             status: 'complete',
             validationStatus: 'validated',
-            currentTask: 'Container ingress, .env.example & build preflight verified',
+            currentTask: 'Dependencies installed; real application build and preview artifact verified',
             generatedArtifact: devopsFiles.map((f) => f.path).join(', '),
           },
           {
-            message: buildRec.stdout || 'Build preflight & git repository initialized cleanly.',
+            message: [installRec.stdout, buildRec.stdout, gitRec.stdout].filter(Boolean).join('\n') || 'Dependencies installed, application built, and workspace git state inspected.',
             type: 'success',
           }
         );
