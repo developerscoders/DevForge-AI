@@ -322,15 +322,14 @@ app.get('/api/projects/:id/files/:filePath(*)', (req, res) => {
 
 // Actual generated-app preview. The preview is served only from the isolated
 // workspace's Vite build output; no prompt-keyword demo or synthetic UI is used.
-app.get('/api/projects/:id/preview/status', (req, res) => {
+app.get('/api/projects/:id/preview/status', async (req, res) => {
   const projectId = req.params.id;
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) {
     return res.status(400).json({ success: false, status: 'invalid_project_id' });
   }
-  const project = findOrHydrateProject(projectId);
-  if (!project) return res.status(404).json({ success: false, status: 'project_not_found' });
-
   try {
+    const project = await findOrHydrateProjectForRequest(req, projectId);
+    if (!project) return res.status(404).json({ success: false, status: 'project_not_found' });
     ensureProjectWorkspaceDir(projectId);
     const indexPath = resolveSafeWorkspacePath(projectId, 'dist/index.html');
     const packagePath = resolveSafeWorkspacePath(projectId, 'package.json');
@@ -341,10 +340,14 @@ app.get('/api/projects/:id/preview/status', (req, res) => {
       previewUrl: hasBuild ? `/preview/${encodeURIComponent(projectId)}/` : null,
       filesCount: project.files?.length || 0,
       hasPackageJson: fs.existsSync(packagePath),
-      message: hasBuild ? 'Serving the actual generated Vite build.' : 'No successful dist/index.html exists yet. Run dependency installation (with approval) and the real build tool.',
+      message: hasBuild ? 'Serving the actual generated Vite build.' : 'No successful dist/index.html exists yet. Install dependencies and execute the real build before previewing.',
     });
   } catch (error: any) {
-    return res.status(400).json({ success: false, status: 'preview_error', error: error?.message || 'Preview path validation failed' });
+    const message = String(error?.message || error);
+    if (message.startsWith('AUTH_') || message.startsWith('PROJECT_FORBIDDEN') || message.startsWith('FIRESTORE_')) {
+      return sendProjectHydrationError(res, error);
+    }
+    return res.status(400).json({ success: false, status: 'preview_error', error: message || 'Preview path validation failed' });
   }
 });
 
@@ -573,6 +576,12 @@ app.get('/api/deploy/config', (req, res) => {
 // 2. Project Creation (Real Multi-Agent DAG Orchestrator + Tool Calling + Execution Persistence)
 app.post('/api/projects', async (req, res) => {
   const { prompt, modelConfig, requireApprovalForCriticalWrites, preApprovedCriticalTools } = req.body || {};
+  let authenticatedUser: { uid: string; email?: string };
+  try {
+    authenticatedUser = await verifyFirebaseIdToken(getBearerToken(req));
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
+  }
   if (typeof prompt !== 'string' || !prompt.trim()) {
     return res.status(400).json({ error: 'Prompt is required' });
   }
@@ -611,7 +620,7 @@ app.post('/api/projects', async (req, res) => {
     files: [],
     deployedUrl: `/preview/${projectId}`,
     agents: buildInitialAgentsForProject(projectId, resolvedModelConfig),
-    userId: req.body?.userId || undefined,
+    userId: authenticatedUser.uid,
   };
 
   executionStore.saveProject(initialProject);
