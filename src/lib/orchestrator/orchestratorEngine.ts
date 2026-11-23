@@ -793,7 +793,7 @@ class MultiAgentOrchestrator {
         'Author tests/app.test.ts exercising real exported modules and verify unit, integration & lint checks.',
         'ag_qa',
         'Quinn Lead',
-        ['task_sophia_backend', 'task_frank_ui', 'task_quinn_prep'],
+        ['task_sophia_backend', 'task_frank_ui', 'task_quinn_prep', 'task_devon_sre'],
         5,
         6
       ),
@@ -1767,30 +1767,16 @@ class MultiAgentOrchestrator {
           }
         }
 
-        const [tcRec, intRec] = await Promise.all([
-          executeRegisteredTool(
-            'run_typecheck',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_arch',
-              agentName: 'Sophia Lead',
-              subagentId: subBackend.id,
-              subagentName: subBackend.name,
-            }
-          ),
-          executeRegisteredTool(
-            'run_integration_tests',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_arch',
-              agentName: 'Sophia Lead',
-              subagentId: subBackend.id,
-              subagentName: subApiNameFallback(subBackend),
-            }
-          ),
-        ]);
+        const tcRec = await executeRegisteredTool(
+          'run_typecheck',
+          {},
+          { ...toolCtxBase, agentId: 'ag_arch', agentName: 'Sophia Lead', subagentId: subBackend.id, subagentName: subBackend.name }
+        );
+        const intRec = await executeRegisteredTool(
+          'run_integration_tests',
+          {},
+          { ...toolCtxBase, agentId: 'ag_arch', agentName: 'Sophia Lead', subagentId: subBackend.id, subagentName: subApiNameFallback(subBackend) }
+        );
 
         if (!tcRec.output?.passed) {
           throw new Error(`Backend TypeScript syntax verification failed: ${(tcRec.output?.errors || []).join('; ')}`);
@@ -1944,30 +1930,16 @@ class MultiAgentOrchestrator {
           }
         }
 
-        const [tcRec, lintRec] = await Promise.all([
-          executeRegisteredTool(
-            'run_typecheck',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_fe',
-              agentName: 'Frank Lead',
-              subagentId: subComp.id,
-              subagentName: subComp.name,
-            }
-          ),
-          executeRegisteredTool(
-            'run_linter',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_fe',
-              agentName: 'Frank Lead',
-              subagentId: subComp.id,
-              subagentName: subComp.name,
-            }
-          ),
-        ]);
+        const tcRec = await executeRegisteredTool(
+          'run_typecheck',
+          {},
+          { ...toolCtxBase, agentId: 'ag_fe', agentName: 'Frank Lead', subagentId: subComp.id, subagentName: subComp.name }
+        );
+        const lintRec = await executeRegisteredTool(
+          'run_linter',
+          {},
+          { ...toolCtxBase, agentId: 'ag_fe', agentName: 'Frank Lead', subagentId: subComp.id, subagentName: subComp.name }
+        );
 
         if (!tcRec.output?.passed) {
           throw new Error(`Frontend TypeScript compilation failed: ${(tcRec.output?.errors || []).join('; ')}`);
@@ -2078,30 +2050,16 @@ class MultiAgentOrchestrator {
           }
         );
 
-        const [testRec, intRec] = await Promise.all([
-          executeRegisteredTool(
-            'run_unit_tests',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_qa',
-              agentName: 'Quinn Lead',
-              subagentId: subUnit.id,
-              subagentName: subUnit.name,
-            }
-          ),
-          executeRegisteredTool(
-            'run_integration_tests',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_qa',
-              agentName: 'Quinn Lead',
-              subagentId: subUnit.id,
-              subagentName: subUnit.name,
-            }
-          ),
-        ]);
+        const testRec = await executeRegisteredTool(
+          'run_unit_tests',
+          {},
+          { ...toolCtxBase, agentId: 'ag_qa', agentName: 'Quinn Lead', subagentId: subUnit.id, subagentName: subUnit.name }
+        );
+        const intRec = await executeRegisteredTool(
+          'run_integration_tests',
+          {},
+          { ...toolCtxBase, agentId: 'ag_qa', agentName: 'Quinn Lead', subagentId: subUnit.id, subagentName: subUnit.name }
+        );
 
         if (testRec.output?.syntaxErrors?.length > 0) {
           throw new Error(`QA test suite has TypeScript syntax errors: ${testRec.output.syntaxErrors.join('; ')}`);
@@ -2170,18 +2128,24 @@ class MultiAgentOrchestrator {
           );
         }
 
-        const [buildRec, gitRec] = await Promise.all([
-          executeRegisteredTool(
-            'run_build',
-            {},
-            { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
-          ),
-          executeRegisteredTool(
-            'git_status',
-            {},
-            { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
-          ),
-        ]);
+        const installRec = await executeRegisteredTool(
+          'install_dependencies',
+          {},
+          { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
+        );
+        if (!installRec.output?.installed) {
+          throw new Error(`Dependency installation failed: ${installRec.stderr || installRec.error || 'npm install did not complete'}`);
+        }
+        const buildRec = await executeRegisteredTool(
+          'run_build',
+          {},
+          { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
+        );
+        const gitRec = await executeRegisteredTool(
+          'git_status',
+          {},
+          { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
+        );
 
         if (!buildRec.output?.passed) {
           throw new Error(`Build preflight failed: ${buildRec.stderr || 'Missing required build artifacts'}`);
