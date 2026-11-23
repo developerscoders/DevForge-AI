@@ -29,7 +29,7 @@ export const PROVIDER_MODEL_CATALOG: Record<AgentProvider, ProviderModelCatalogE
     { id: 'nvidia/nemotron-3.5-super-vl:free', label: 'NVIDIA Nemotron 3.5 Super VL (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'nvidia/nemotron-3.5-lightning:free', label: 'NVIDIA Nemotron 3.5 Lightning (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'particle-ai/particle-1:free', label: 'Particle-1 (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
-    { id: 'dots-studio/dots-3-note-preview:free', label: 'Dots 3 Note Preview (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
+    { id: 'nvidia/nemotron-3.5-super-vl:free', label: 'Nemotron 3.5 Super VL (Free · QA)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'inclusionai/ling-3.2-flash:free', label: 'Ling 3.2 Flash (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'nvidia/nemotron-3.5-super-vl:free', label: 'Cohere North Mini Code (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
     { id: 'recursive/flint-v1.0:free', label: 'Recursive Flint (Free)', provider: 'openrouter', maxOutputTokens: 8192, available: true },
@@ -72,7 +72,7 @@ export const AGENT_ROSTER: Record<AgentRosterEntry['key'], AgentRosterEntry> = {
   quinn: {
     id: 'ag_qa', key: 'quinn', name: 'Quinn Lead',
     role: 'Senior QA & Testing Lead', provider: 'openrouter',
-    defaultModel: 'dots-studio/dots-3-note-preview:free',
+    defaultModel: 'nvidia/nemotron-3.5-super-vl:free',
     fallbackModels: ['baidu/ernie-5.5-flash-preview:free', 'nvidia/nemotron-3.5-lightning:free', 'openrouter/free'],
     availability: 'verified',
   },
