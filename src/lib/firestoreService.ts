@@ -350,6 +350,8 @@ function stripUndefinedFirestoreValues(value: any): any {
   return value;
 }
 
+const persistedToolRecordSignatures = new Map<string, string>();
+
 async function persistFirestoreProjectRun(projectId: string, run: any): Promise<void> {
   if (!run?.runId) return;
   const { toolExecutions = [], ...runMetadata } = run;
@@ -360,25 +362,41 @@ async function persistFirestoreProjectRun(projectId: string, run: any): Promise<
     updatedAt: new Date().toISOString(),
   }), { merge: true });
 
-  for (let offset = 0; offset < toolExecutions.length; offset += FIRESTORE_BATCH_LIMIT) {
+  const changedRecords: Array<{ executionId: string; key: string; signature: string; data: any }> = [];
+  for (const record of toolExecutions) {
+    const executionId = String(record.executionId || `tool_${changedRecords.length}`);
+    const inputArgs = { ...(record.inputArgs || {}) };
+    if (record.toolName === 'write_file' && typeof inputArgs.content === 'string') {
+      inputArgs.contentBytes = new TextEncoder().encode(inputArgs.content).length;
+      inputArgs.contentPersistedAsProjectFile = true;
+      delete inputArgs.content;
+    }
+    const data = stripUndefinedFirestoreValues({
+      ...record,
+      inputArgs,
+      projectId,
+      runId: run.runId,
+      updatedAt: new Date().toISOString(),
+    });
+    const key = `${projectId}:${run.runId}:${executionId}`;
+    const signature = JSON.stringify(data);
+    if (persistedToolRecordSignatures.get(key) !== signature) {
+      changedRecords.push({ executionId, key, signature, data });
+    }
+  }
+
+  for (let offset = 0; offset < changedRecords.length; offset += FIRESTORE_BATCH_LIMIT) {
     const batch = writeBatch(db);
-    for (const record of toolExecutions.slice(offset, offset + FIRESTORE_BATCH_LIMIT)) {
-      const executionId = String(record.executionId || `tool_${offset}`);
-      const inputArgs = { ...(record.inputArgs || {}) };
-      // Source text is already persisted in the project's files subcollection.
-      // Keep a compact, auditable reference here instead of duplicating large file bodies.
-      if (record.toolName === 'write_file' && typeof inputArgs.content === 'string') {
-        inputArgs.contentBytes = new TextEncoder().encode(inputArgs.content).length;
-        inputArgs.contentPersistedAsProjectFile = true;
-        delete inputArgs.content;
-      }
+    const chunk = changedRecords.slice(offset, offset + FIRESTORE_BATCH_LIMIT);
+    for (const record of chunk) {
       batch.set(
-        doc(db, 'projects', projectId, 'runs', run.runId, 'tools', encodeURIComponent(executionId)),
-        stripUndefinedFirestoreValues({ ...record, inputArgs, projectId, runId: run.runId, updatedAt: new Date().toISOString() }),
+        doc(db, 'projects', projectId, 'runs', run.runId, 'tools', encodeURIComponent(record.executionId)),
+        record.data,
         { merge: true }
       );
     }
     await batch.commit();
+    for (const record of chunk) persistedToolRecordSignatures.set(record.key, record.signature);
   }
 }
 
