@@ -119,38 +119,36 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
     expect(res.attempts[2].errorType).toBe('ok');
   });
 
-  it('falls back to Gemini truthfully when OpenRouter candidates all fail and GEMINI_API_KEY is configured', async () => {
+  it('never falls back to paid Gemini when free OpenRouter candidates all fail', async () => {
     process.env.OPENROUTER_API_KEY = 'sk-or-test-key-12345';
     process.env.GEMINI_API_KEY = 'AIzaTestKeyForUnitTestingOnly12345';
+    let geminiWasCalled = false;
 
-    const mockFetch: typeof fetch = async () => {
-      return new Response('unavailable', { status: 503 });
-    };
+    const mockFetch: typeof fetch = async () => new Response('unavailable', { status: 503 });
 
     const res = await callMultiProviderLLM({
       provider: 'openrouter',
-      model: 'deepseek/deepseek-chat-v3.1',
-      fallbackModels: ['qwen/qwen-2.5-coder-32b-instruct:free'],
+      model: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+      fallbackModels: ['recursive/flint-v1.0:free', 'openrouter/free'],
       prompt: 'Respond briefly',
       maxRetriesPerCandidate: 0,
       fetchImpl: mockFetch,
       geminiClientOverride: {
         models: {
-          generateContent: async () => ({
-            text: 'Gemini recovery response',
-            usageMetadata: { totalTokenCount: 55 },
-          }),
+          generateContent: async () => {
+            geminiWasCalled = true;
+            return { text: 'Paid fallback must not run' };
+          },
         },
       },
     });
 
-    expect(res.text).toBe('Gemini recovery response');
+    expect(geminiWasCalled).toBe(false);
+    expect(res.text).toBe('');
     expect(res.requestedProvider).toBe('openrouter');
-    expect(res.requestedModel).toBe('deepseek/deepseek-chat-v3.1');
-    expect(res.actualProvider).toBe('gemini');
-    expect(res.actualModel).toBe('gemini-2.5-flash');
-    expect(res.usedFallback).toBe(true);
-    expect(res.isSimulated).toBe(false);
+    expect(res.actualProvider).toBe('none');
+    expect(res.attempts.every((attempt) => attempt.provider !== 'gemini')).toBe(true);
+    expect(res.isSimulated).toBe(true);
   });
 
   it('retries callStructuredLLMWithZod once when initial output fails JSON/Zod validation', async () => {
