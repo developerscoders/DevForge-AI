@@ -109,6 +109,33 @@ async function firestoreRequest(url: string, init: RequestInit = {}): Promise<Re
   return response;
 }
 
+async function loadRunFromFirestore(base: string, projectId: string, runId: string): Promise<any | null> {
+  const runResponse = await firestoreRequest(
+    `${base}/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`
+  );
+  if (runResponse.status === 404) return null;
+  if (!runResponse.ok) throw new Error(`FIRESTORE_RUN_READ_FAILED: run document returned HTTP ${runResponse.status}.`);
+  const runDocument = await runResponse.json() as FirestoreDocument;
+  const run = decodeFields(runDocument.fields || {});
+
+  const tools: any[] = [];
+  let pageToken = '';
+  do {
+    const url = new URL(`${base}/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/tools`);
+    url.searchParams.set('pageSize', '1000');
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    const toolsResponse = await firestoreRequest(url.toString());
+    if (toolsResponse.status === 404) break;
+    if (!toolsResponse.ok) throw new Error(`FIRESTORE_TOOL_READ_FAILED: run tools returned HTTP ${toolsResponse.status}.`);
+    const page: any = await toolsResponse.json();
+    for (const toolDocument of page.documents || []) tools.push(decodeFields(toolDocument.fields || {}));
+    pageToken = page.nextPageToken || '';
+  } while (pageToken);
+
+  tools.sort((a, b) => new Date(a.startedAt || a.timestamp || 0).getTime() - new Date(b.startedAt || b.timestamp || 0).getTime());
+  return { ...run, runId, toolExecutions: tools };
+}
+
 export async function loadOwnedProjectFromFirestore(projectId: string, idToken: string): Promise<any | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) throw new Error('INVALID_PROJECT_ID: Project ID format is invalid.');
   const user = await verifyFirebaseIdToken(idToken);
@@ -119,6 +146,13 @@ export async function loadOwnedProjectFromFirestore(projectId: string, idToken: 
   const document = await projectResponse.json() as FirestoreDocument;
   const project = decodeFields(document.fields || {});
   if (project.userId !== user.uid) throw new Error('PROJECT_FORBIDDEN: This project does not belong to the authenticated Firebase user.');
+
+  const runId = typeof project.lastRunId === 'string'
+    ? project.lastRunId
+    : project.lastExecutionRun?.runId;
+  const lastExecutionRun = runId
+    ? await loadRunFromFirestore(base, projectId, runId)
+    : project.lastExecutionRun || null;
 
   const files: any[] = [];
   let pageToken = '';
@@ -137,5 +171,5 @@ export async function loadOwnedProjectFromFirestore(projectId: string, idToken: 
     pageToken = page.nextPageToken || '';
   } while (pageToken);
 
-  return { id: projectId, ...project, files };
+  return { id: projectId, ...project, files, lastExecutionRun };
 }
