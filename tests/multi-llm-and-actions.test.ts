@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG, PROVIDER_MODEL_CATALOG } from '../src/config/agentRoster.js';
+import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG, PROVIDER_MODEL_CATALOG, resolveFreeAgentModel } from '../src/config/agentRoster.js';
 import {
   callMultiProviderLLM,
   callStructuredLLMWithZod,
@@ -58,6 +58,13 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
       expect(agent.fallbackModels.every((model) => model === 'openrouter/free' || model.endsWith(':free'))).toBe(true);
     }
     expect(PROVIDER_MODEL_CATALOG.nvidia.every((m) => !m.available)).toBe(true);
+  });
+
+  it('rejects stale paid-provider selections and resolves every agent to an explicit free OpenRouter model', () => {
+    expect(resolveFreeAgentModel('aria', 'gemini-2.5-flash')).toBe(AGENT_ROSTER.aria.defaultModel);
+    expect(resolveFreeAgentModel('quinn', 'openai/gpt-oss-20b')).toBe(AGENT_ROSTER.quinn.defaultModel);
+    expect(resolveFreeAgentModel('frank', 'recursive/flint-v1.0:free')).toBe('recursive/flint-v1.0:free');
+    expect(resolveFreeAgentModel('devon', 'openrouter/free')).toBe('openrouter/free');
   });
 
   it('preserves requested small model first in candidate chain and caps token budget for 1B models', () => {
