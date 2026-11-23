@@ -897,8 +897,14 @@ app.get('/api/projects/:id/tools', async (req, res) => {
 });
 
 // 12. Real-Time Ordered SSE Stream (supports Last-Event-ID / ?sinceSeq= replay)
-app.get('/api/projects/:id/events', (req, res) => {
+app.get('/api/projects/:id/events', async (req, res) => {
   const projectId = req.params.id;
+  try {
+    const project = await findOrHydrateProjectForRequest(req, projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found in Firestore' });
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
+  }
   const headerSeq = req.headers['last-event-id'] ? Number(req.headers['last-event-id']) : undefined;
   const querySeq = req.query.sinceSeq !== undefined ? Number(req.query.sinceSeq) : undefined;
   const sinceSeq = Number.isFinite(querySeq) ? querySeq! : Number.isFinite(headerSeq) ? headerSeq! : 0;
