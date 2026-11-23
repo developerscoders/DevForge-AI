@@ -34,6 +34,26 @@ service cloud.firestore {
         allow read, create, update, delete: if projectOwner();
       }
 
+      // Execution snapshots and individual tool records are separate documents
+      // so a large run cannot overflow the parent project document's 1 MiB limit.
+      match /runs/{runId} {
+        function projectOwner() {
+          return signedIn() &&
+            get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
+        }
+        allow read, create, update: if projectOwner();
+        allow delete: if false;
+
+        match /tools/{toolId} {
+          function projectOwner() {
+            return signedIn() &&
+              get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
+          }
+          allow read, create, update: if projectOwner();
+          allow delete: if false;
+        }
+      }
+
       match /exports/{exportId} {
         allow create: if isOwner(get(/databases/$(database)/documents/projects/$(projectId)).data.userId)
           && request.resource.data.userId == request.auth.uid;
