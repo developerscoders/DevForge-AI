@@ -67,10 +67,10 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
     expect(resolveFreeAgentModel('devon', 'openrouter/free')).toBe('openrouter/free');
   });
 
-  it('preserves requested small model first in candidate chain and caps token budget for 1B models', () => {
+  it('rejects stale non-free model IDs and keeps the OpenRouter candidate chain free-only', () => {
     const candidates = getOpenRouterCandidateModels('meta-llama/llama-3.2-1b-instruct');
-    expect(candidates[0]).toBe('meta-llama/llama-3.2-1b-instruct');
-    expect(candidates.length).toBeGreaterThanOrEqual(3);
+    expect(candidates[0]).toBe('nvidia/nemotron-3.5-super-vl:free');
+    expect(candidates.every((model) => model === 'openrouter/free' || model.endsWith(':free'))).toBe(true);
     expect(getModelTokenBudget('meta-llama/llama-3.2-1b-instruct', 4096)).toBeLessThanOrEqual(1024);
   });
 
@@ -82,10 +82,10 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
       const body = JSON.parse(String(init?.body || '{}'));
       calledModels.push(body.model);
 
-      if (body.model === 'meta-llama/llama-3.2-1b-instruct') {
+      if (body.model === 'nvidia/nemotron-3.5-super-vl:free') {
         return new Response(JSON.stringify({ error: { message: 'rate limited' } }), { status: 429 });
       }
-      if (body.model === 'deepseek/deepseek-chat-v3.1') {
+      if (body.model === 'baidu/ernie-5.5-flash-preview:free') {
         return new Response(JSON.stringify({ choices: [{ message: { content: '   ' } }] }), { status: 200 });
       }
       return new Response(
@@ -99,19 +99,19 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
 
     const res = await callMultiProviderLLM({
       provider: 'openrouter',
-      model: 'meta-llama/llama-3.2-1b-instruct',
-      fallbackModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen-2.5-coder-32b-instruct:free'],
+      model: 'nvidia/nemotron-3.5-super-vl:free',
+      fallbackModels: ['baidu/ernie-5.5-flash-preview:free', 'particle-ai/particle-1:free'],
       prompt: 'Generate plan JSON',
       maxRetriesPerCandidate: 0,
       fetchImpl: mockFetch,
     });
 
-    expect(calledModels[0]).toBe('meta-llama/llama-3.2-1b-instruct');
-    expect(calledModels[1]).toBe('deepseek/deepseek-chat-v3.1');
-    expect(calledModels[2]).toBe('qwen/qwen-2.5-coder-32b-instruct:free');
-    expect(res.requestedModel).toBe('meta-llama/llama-3.2-1b-instruct');
+    expect(calledModels[0]).toBe('nvidia/nemotron-3.5-super-vl:free');
+    expect(calledModels[1]).toBe('baidu/ernie-5.5-flash-preview:free');
+    expect(calledModels[2]).toBe('particle-ai/particle-1:free');
+    expect(res.requestedModel).toBe('nvidia/nemotron-3.5-super-vl:free');
     expect(res.actualProvider).toBe('openrouter');
-    expect(res.actualModel).toBe('qwen/qwen-2.5-coder-32b-instruct:free');
+    expect(res.actualModel).toBe('particle-ai/particle-1:free');
     expect(res.usedFallback).toBe(true);
     expect(res.attempts).toHaveLength(3);
     expect(res.attempts[0].errorType).toBe('rate_limit');
