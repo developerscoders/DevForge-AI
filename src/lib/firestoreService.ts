@@ -390,7 +390,11 @@ export const fetchFirestoreProjectById = async (projectId: string): Promise<Proj
   }
 };
 
-export const saveFirestoreProject = async (project: Project, userId?: string) => {
+export const saveFirestoreProject = async (
+  project: Project,
+  userId?: string,
+  options: { persistFiles?: boolean } = {}
+) => {
   // Keep a local recovery copy, but persist source files separately in Firestore so
   // large generated projects cannot exceed Firestore's 1 MiB document limit.
   saveLocalStoredProject(project, userId);
@@ -408,7 +412,7 @@ export const saveFirestoreProject = async (project: Project, userId?: string) =>
       updatedAt: new Date().toISOString(),
     }, { merge: true });
     if (!saved || isFirestoreQuotaExhausted()) return;
-    await persistFirestoreProjectFiles(project.id, files);
+    if (options.persistFiles !== false) await persistFirestoreProjectFiles(project.id, files);
   } catch (e: any) {
     if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     console.warn('[Firestore] Project/file persistence failed:', e?.message || e);
