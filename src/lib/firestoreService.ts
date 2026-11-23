@@ -522,7 +522,12 @@ export const updateFirestoreProjectFiles = async (projectId: string, files: File
   if (isFirestoreQuotaExhausted() || !auth.currentUser) return;
   try {
     const docRef = doc(db, 'projects', projectId);
-    await safeFirestoreUpdateDoc(docRef, { files, updatedAt: new Date().toISOString() });
+    await safeFirestoreUpdateDoc(docRef, {
+      files: [],
+      fileCount: files.filter((file) => file.type !== 'folder').length,
+      updatedAt: new Date().toISOString(),
+    });
+    await persistFirestoreProjectFiles(projectId, files);
   } catch (e: any) {
     if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
   }
