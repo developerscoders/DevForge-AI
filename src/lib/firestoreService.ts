@@ -338,15 +338,27 @@ async function persistFirestoreProjectFiles(projectId: string, files: FileNode[]
   }
 }
 
+function stripUndefinedFirestoreValues(value: any): any {
+  if (Array.isArray(value)) return value.map(stripUndefinedFirestoreValues);
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, nested]) => nested !== undefined)
+        .map(([key, nested]) => [key, stripUndefinedFirestoreValues(nested)])
+    );
+  }
+  return value;
+}
+
 async function persistFirestoreProjectRun(projectId: string, run: any): Promise<void> {
   if (!run?.runId) return;
   const { toolExecutions = [], ...runMetadata } = run;
   const runRef = doc(db, 'projects', projectId, 'runs', run.runId);
-  await safeFirestoreSetDoc(runRef, {
+  await safeFirestoreSetDoc(runRef, stripUndefinedFirestoreValues({
     ...runMetadata,
     toolCount: toolExecutions.length,
     updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  }), { merge: true });
 
   for (let offset = 0; offset < toolExecutions.length; offset += FIRESTORE_BATCH_LIMIT) {
     const batch = writeBatch(db);
@@ -362,7 +374,7 @@ async function persistFirestoreProjectRun(projectId: string, run: any): Promise<
       }
       batch.set(
         doc(db, 'projects', projectId, 'runs', run.runId, 'tools', encodeURIComponent(executionId)),
-        { ...record, inputArgs, projectId, runId: run.runId, updatedAt: new Date().toISOString() },
+        stripUndefinedFirestoreValues({ ...record, inputArgs, projectId, runId: run.runId, updatedAt: new Date().toISOString() }),
         { merge: true }
       );
     }
