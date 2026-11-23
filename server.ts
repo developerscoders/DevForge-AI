@@ -375,7 +375,7 @@ app.get('/preview/:id', (req, res) => {
 app.get('/preview/:id/*', (req, res) => {
   const projectId = req.params.id;
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) return res.sendStatus(400);
-  const requested = String(req.params[0] || '').replace(/^\\/+/, '');
+  const requested = String(req.params[0] || '').replace(/^\/+/, '');
   try {
     const target = resolveSafeWorkspacePath(projectId, path.posix.join('dist', requested));
     if (fs.existsSync(target) && fs.statSync(target).isFile()) return res.sendFile(target);
