@@ -13,6 +13,7 @@ import {
   AGENT_ROSTER,
   DEFAULT_MODEL_CONFIG,
   inferProviderFromModel,
+  resolveFreeAgentModel,
 } from '../../config/agentRoster.js';
 import { buildAgentPrompt } from '../../config/agentPromptRegistry.js';
 import {
@@ -198,6 +199,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentRoleDefinition> = {
       'read_file',
       'write_file',
       'edit_file',
+      'install_dependencies',
       'run_build',
       'run_linter',
       'git_status',
@@ -244,7 +246,7 @@ export function buildInitialAgentsForProject(
 ): Agent[] {
   return Object.values(AGENT_DEFINITIONS).map((def) => {
     const rosterEntry = AGENT_ROSTER[def.key];
-    const configuredModel = modelConfig[def.modelConfigRoleKey] || rosterEntry.defaultModel;
+    const configuredModel = resolveFreeAgentModel(def.key, modelConfig[def.modelConfigRoleKey]);
     return {
       id: def.id,
       name: def.name,
@@ -321,10 +323,10 @@ class MultiAgentOrchestrator {
           const rosterEntry = AGENT_ROSTER[def.key];
           ag.responsibility = def.responsibility;
           ag.allowedTools = [...def.allowedTools];
-          const requested = project.modelConfig?.[def.modelConfigRoleKey] || rosterEntry.defaultModel;
+          const requested = resolveFreeAgentModel(def.key, project.modelConfig?.[def.modelConfigRoleKey]);
           ag.model = requested;
           ag.requestedModel = requested;
-          ag.provider = inferProviderFromModel(requested, rosterEntry.provider);
+          ag.provider = 'openrouter';
           ag.status = ag.id === 'ag_ceo' ? 'thinking' : 'waiting';
           ag.error = undefined;
           ag.fallbackUsed = false;
@@ -793,14 +795,14 @@ class MultiAgentOrchestrator {
         'Author tests/app.test.ts exercising real exported modules and verify unit, integration & lint checks.',
         'ag_qa',
         'Quinn Lead',
-        ['task_sophia_backend', 'task_frank_ui', 'task_quinn_prep'],
+        ['task_sophia_backend', 'task_frank_ui', 'task_quinn_prep', 'task_devon_sre'],
         5,
         6
       ),
       makeTask(
         'task_devon_sre',
-        'Containerization, .env.example & Build Preflight',
-        'Generate Dockerfile, docker-compose.yml, .env.example, verify port 3000 ingress, git status & build preflight.',
+        'Install Dependencies, Build & Verify Preview',
+        'Install project dependencies, execute the real npm build, verify the actual preview artifact, then inspect git status.',
         'ag_sre',
         'Devon Lead',
         ['task_sophia_backend', 'task_frank_ui'],
@@ -1263,8 +1265,8 @@ class MultiAgentOrchestrator {
     const def = Object.values(AGENT_DEFINITIONS).find((d) => d.key === agentKey)!;
     const roster = AGENT_ROSTER[agentKey];
     const requested = project.modelConfig?.[def.modelConfigRoleKey];
-    const model = requested || roster.defaultModel;
-    const provider = inferProviderFromModel(model, roster.provider);
+    const model = resolveFreeAgentModel(agentKey, requested);
+    const provider = 'openrouter';
     return { provider, model, fallbackModels: roster.fallbackModels };
   }
 
@@ -1342,27 +1344,35 @@ class MultiAgentOrchestrator {
           { ...toolCtxBase, agentId: 'ag_ceo', agentName: 'Aria CEO' }
         );
 
-        let geminiNotes = '';
-        if (getSharedGeminiClient()) {
-          try {
-            const gemRes = await runAgentWithGeminiTools({
-              model: resolved.model,
-              systemInstruction: ARIA_SYSTEM_INSTRUCTIONS,
-              userPrompt: `Inspect workspace "${projectName}" for complete prompt:\n${fullPrompt}\nCall inspect_project_structure or list_files once and summarize architectural focus areas.`,
-              toolContext: { ...toolCtxBase, agentId: 'ag_ceo', agentName: 'Aria CEO' },
-              allowedTools: ['inspect_project_structure', 'list_files'],
-              maxIterations: 2,
-              timeoutMs: 12000,
-            });
-            geminiNotes = gemRes.text;
-            const run = executionStore.getRun(runId);
-            if (run) {
-              run.metrics.totalTokensUsed += gemRes.tokensUsed;
-              executionStore.saveRun(run);
-            }
-          } catch {
-            // Non-blocking: deterministic classification + DAG proceeds cleanly
+        // Use the same selected free OpenRouter provider as the rest of the swarm.
+        // Do not send an OpenRouter model ID to the Gemini SDK: that silently fails
+        // and made the CEO appear to be thinking without doing useful model work.
+        let orchestrationNotes = '';
+        let actualModelUsed = `${resolved.provider} (${resolved.model})`;
+        try {
+          const agentResult = await runAgentWithControlledToolActions({
+            provider: resolved.provider,
+            model: resolved.model,
+            fallbackModels: resolved.fallbackModels,
+            systemInstruction: 'You are Aria, the engineering orchestrator. Preserve the complete user intent. Inspect the workspace, identify the deliverables, and use only the allowed tools. Do not claim a build, test, or file write unless the tool actually returned success.',
+            userPrompt: `Original user request (preserve all requirements):\n${fullPrompt}\n\nProject classification: ${classification.project_type}. Features: ${features.map((f: any) => f.name || f.id || String(f)).join(', ')}. Inspect the workspace and provide concise implementation directives for Parker and the downstream engineering agents.`,
+            toolContext: { ...toolCtxBase, agentId: 'ag_ceo', agentName: 'Aria CEO' },
+            allowedTools: ['inspect_project_structure', 'list_files', 'read_file'],
+            maxIterations: 4,
+          });
+          orchestrationNotes = agentResult.text;
+          actualModelUsed = `${agentResult.actualProvider} (${agentResult.actualModel})`;
+          const latestRun = executionStore.getRun(runId);
+          if (latestRun) {
+            latestRun.metrics.totalTokensUsed += agentResult.tokensUsed || 0;
+            executionStore.saveRun(latestRun);
           }
+        } catch (error: any) {
+          eventBus.emit(projectId, runId, 'log:info', {
+            agentName: 'Aria CEO',
+            level: 'warning',
+            message: `Free-model planning call failed; deterministic prompt classification remains active: ${redactSecrets(error?.message || String(error))}`,
+          }, { agentId: 'ag_ceo' });
         }
 
         this.recordCommunication(runId, projectId, {
@@ -1376,10 +1386,17 @@ class MultiAgentOrchestrator {
         });
 
         this.updateAgentState(project, runId, 'ag_ceo', {
+          status: 'waiting',
+          validationStatus: 'validated',
+          currentTask: 'Plan complete; delegated implementation to Parker and downstream agents',
+          modelUsed: actualModelUsed,
           generatedArtifact: `9-Stage DAG & ${features.length}-Feature Coverage Map`,
+        }, {
+          message: `Planning complete. Delegated ${features.length} mapped requirements to Parker; Aria is waiting for the final verification gate.`,
+          type: 'success',
         });
 
-        return { classification, features, workspace: structRec.output, geminiNotes };
+        return { classification, features, workspace: structRec.output, orchestrationNotes };
       }
 
       // ---------------------------------------------------------
@@ -1752,30 +1769,16 @@ class MultiAgentOrchestrator {
           }
         }
 
-        const [tcRec, intRec] = await Promise.all([
-          executeRegisteredTool(
-            'run_typecheck',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_arch',
-              agentName: 'Sophia Lead',
-              subagentId: subBackend.id,
-              subagentName: subBackend.name,
-            }
-          ),
-          executeRegisteredTool(
-            'run_integration_tests',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_arch',
-              agentName: 'Sophia Lead',
-              subagentId: subBackend.id,
-              subagentName: subApiNameFallback(subBackend),
-            }
-          ),
-        ]);
+        const tcRec = await executeRegisteredTool(
+          'run_typecheck',
+          {},
+          { ...toolCtxBase, agentId: 'ag_arch', agentName: 'Sophia Lead', subagentId: subBackend.id, subagentName: subBackend.name }
+        );
+        const intRec = await executeRegisteredTool(
+          'run_integration_tests',
+          {},
+          { ...toolCtxBase, agentId: 'ag_arch', agentName: 'Sophia Lead', subagentId: subBackend.id, subagentName: subApiNameFallback(subBackend) }
+        );
 
         if (!tcRec.output?.passed) {
           throw new Error(`Backend TypeScript syntax verification failed: ${(tcRec.output?.errors || []).join('; ')}`);
@@ -1929,30 +1932,16 @@ class MultiAgentOrchestrator {
           }
         }
 
-        const [tcRec, lintRec] = await Promise.all([
-          executeRegisteredTool(
-            'run_typecheck',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_fe',
-              agentName: 'Frank Lead',
-              subagentId: subComp.id,
-              subagentName: subComp.name,
-            }
-          ),
-          executeRegisteredTool(
-            'run_linter',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_fe',
-              agentName: 'Frank Lead',
-              subagentId: subComp.id,
-              subagentName: subComp.name,
-            }
-          ),
-        ]);
+        const tcRec = await executeRegisteredTool(
+          'run_typecheck',
+          {},
+          { ...toolCtxBase, agentId: 'ag_fe', agentName: 'Frank Lead', subagentId: subComp.id, subagentName: subComp.name }
+        );
+        const lintRec = await executeRegisteredTool(
+          'run_linter',
+          {},
+          { ...toolCtxBase, agentId: 'ag_fe', agentName: 'Frank Lead', subagentId: subComp.id, subagentName: subComp.name }
+        );
 
         if (!tcRec.output?.passed) {
           throw new Error(`Frontend TypeScript compilation failed: ${(tcRec.output?.errors || []).join('; ')}`);
@@ -2063,33 +2052,29 @@ class MultiAgentOrchestrator {
           }
         );
 
-        const [testRec, intRec] = await Promise.all([
-          executeRegisteredTool(
-            'run_unit_tests',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_qa',
-              agentName: 'Quinn Lead',
-              subagentId: subUnit.id,
-              subagentName: subUnit.name,
-            }
-          ),
-          executeRegisteredTool(
-            'run_integration_tests',
-            {},
-            {
-              ...toolCtxBase,
-              agentId: 'ag_qa',
-              agentName: 'Quinn Lead',
-              subagentId: subUnit.id,
-              subagentName: subUnit.name,
-            }
-          ),
-        ]);
+        const testRec = await executeRegisteredTool(
+          'run_unit_tests',
+          {},
+          { ...toolCtxBase, agentId: 'ag_qa', agentName: 'Quinn Lead', subagentId: subUnit.id, subagentName: subUnit.name }
+        );
+        const intRec = await executeRegisteredTool(
+          'run_integration_tests',
+          {},
+          { ...toolCtxBase, agentId: 'ag_qa', agentName: 'Quinn Lead', subagentId: subUnit.id, subagentName: subUnit.name }
+        );
 
-        if (testRec.output?.syntaxErrors?.length > 0) {
-          throw new Error(`QA test suite has TypeScript syntax errors: ${testRec.output.syntaxErrors.join('; ')}`);
+        if (testRec.output?.executedRunner !== 'vitest' || testRec.output?.passed !== true) {
+          throw new Error(
+            `Unit tests were not successfully executed. Runner=${testRec.output?.executedRunner || 'none'}; reason=${testRec.output?.reason || testRec.stderr || 'No passing Vitest execution was recorded'}`
+          );
+        }
+        if (
+          executionStore.getProject(projectId)?.projectClassification?.requires_frontend !== false &&
+          (intRec.output?.executed !== true || intRec.output?.passed !== true)
+        ) {
+          throw new Error(
+            `Live preview integration verification failed or was not executed: ${intRec.output?.reason || intRec.output?.error || testRec.stderr || 'Preview HTML/bundle smoke test did not pass'}`
+          );
         }
 
         subUnit.status = 'complete';
@@ -2115,7 +2100,7 @@ class MultiAgentOrchestrator {
             generatedArtifact: 'tests/app.test.ts & Integration Verification Report',
           },
           {
-            message: testRec.stdout || 'QA test verification completed cleanly.',
+            message: [testRec.stdout, intRec.stdout].filter(Boolean).join('\n') || 'QA and live preview verification completed cleanly.',
             type: 'success',
           }
         );
@@ -2159,18 +2144,24 @@ class MultiAgentOrchestrator {
           );
         }
 
-        const [buildRec, gitRec] = await Promise.all([
-          executeRegisteredTool(
-            'run_build',
-            {},
-            { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
-          ),
-          executeRegisteredTool(
-            'git_status',
-            {},
-            { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
-          ),
-        ]);
+        const installRec = await executeRegisteredTool(
+          'install_dependencies',
+          {},
+          { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
+        );
+        if (!installRec.output?.installed) {
+          throw new Error(`Dependency installation failed: ${installRec.stderr || installRec.error || 'npm install did not complete'}`);
+        }
+        const buildRec = await executeRegisteredTool(
+          'run_build',
+          {},
+          { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
+        );
+        const gitRec = await executeRegisteredTool(
+          'git_status',
+          {},
+          { ...toolCtxBase, agentId: 'ag_sre', agentName: 'Devon Lead' }
+        );
 
         const buildOk =
           buildRec.output?.passed === true ||
@@ -2187,11 +2178,11 @@ class MultiAgentOrchestrator {
           {
             status: 'complete',
             validationStatus: 'validated',
-            currentTask: 'Container ingress, .env.example & build preflight verified',
+            currentTask: 'Dependencies installed; real application build and preview artifact verified',
             generatedArtifact: devopsFiles.map((f) => f.path).join(', '),
           },
           {
-            message: buildRec.stdout || 'Build preflight & git repository initialized cleanly.',
+            message: [installRec.stdout, buildRec.stdout, gitRec.stdout].filter(Boolean).join('\n') || 'Dependencies installed, application built, and workspace git state inspected.',
             type: 'success',
           }
         );

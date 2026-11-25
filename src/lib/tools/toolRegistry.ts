@@ -892,9 +892,68 @@ const registryEntries: RegisteredTool[] = [
     },
   },
   {
+    name: 'install_dependencies',
+    category: 'terminal',
+    description: 'Install the generated project dependencies in its isolated workspace using npm ci/install with lifecycle scripts disabled.',
+    zodSchema: z.object({}),
+    geminiParameters: { type: Type.OBJECT, properties: {} },
+    allowedAgents: ['ag_ceo', 'ag_fe', 'ag_coder', 'ag_qa', 'ag_sre'],
+    availabilityCheck: async () => ({ available: true, configured: true }),
+    execute: async (_args, ctx) => {
+      const root = ensureWorkspaceSeeded(ctx.projectId);
+      const packagePath = resolveSafeWorkspacePath(ctx.projectId, 'package.json');
+      if (!fs.existsSync(packagePath)) {
+        return { output: { executed: false, installed: false, reason: 'package.json is missing; no dependency manifest exists.' } };
+      }
+      let pkg: any;
+      try {
+        pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      } catch (error: any) {
+        throw new Error(`Invalid package.json: ${error?.message || 'JSON parse failed'}`);
+      }
+      const hasDependencies = Object.keys({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) }).length > 0;
+      if (!hasDependencies) {
+        return { output: { executed: false, installed: false, reason: 'package.json declares no dependencies.' } };
+      }
+      const hasLock = fs.existsSync(path.join(root, 'package-lock.json'));
+      const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+      const runNpm = (npmArgs: string[]) => runSandboxedProcess(
+        command,
+        process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', ...npmArgs] : npmArgs,
+        root,
+        { timeoutMs: 180000, abortSignal: ctx.abortSignal }
+      );
+      let npmArgs = hasLock
+        ? ['ci', '--ignore-scripts', '--no-audit', '--no-fund']
+        : ['install', '--ignore-scripts', '--no-audit', '--no-fund'];
+      let result = await runNpm(npmArgs);
+      let lockfileFallback = false;
+      // Generated manifests and older lockfiles can drift. Recover with npm install
+      // rather than leaving the project stuck on a stale package-lock.json.
+      if (result.exitCode !== 0 && hasLock) {
+        lockfileFallback = true;
+        npmArgs = ['install', '--ignore-scripts', '--no-audit', '--no-fund'];
+        result = await runNpm(npmArgs);
+      }
+      const installed = result.exitCode === 0 && fs.existsSync(path.join(root, 'node_modules'));
+      return {
+        output: {
+          executed: true,
+          installed,
+          command: `npm ${npmArgs.join(' ')}`,
+          exitCode: result.exitCode,
+          lockfileUsed: hasLock,
+          lockfileFallback,
+        },
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+    },
+  },
+  {
     name: 'run_build',
     category: 'terminal',
-    description: 'Validate build configuration (package.json, vite.config, index.html, Dockerfile) and run workspace build if installed.',
+    description: 'Execute the generated application build script and verify that the expected build artifact exists; never substitute static preflight for a build.',
     zodSchema: z.object({}),
     geminiParameters: { type: Type.OBJECT, properties: {} },
     allowedAgents: ['ag_ceo', 'ag_fe', 'ag_coder', 'ag_sre'],
@@ -903,46 +962,47 @@ const registryEntries: RegisteredTool[] = [
       const root = ensureWorkspaceSeeded(ctx.projectId);
       const proj = executionStore.getProject(ctx.projectId);
       if (!proj) throw new Error('Project not found');
-
-      if (fs.existsSync(path.join(root, 'node_modules', '.bin', 'vite'))) {
-        const res = await runSandboxedProcess(
-          path.join(root, 'node_modules', '.bin', 'vite'),
-          ['build'],
-          root,
-          { timeoutMs: 30000, abortSignal: ctx.abortSignal }
-        );
-        return {
-          output: { executed: 'vite build', passed: res.exitCode === 0, exitCode: res.exitCode },
-          stdout: res.stdout,
-          stderr: res.stderr,
-        };
+      const packagePath = resolveSafeWorkspacePath(ctx.projectId, 'package.json');
+      if (!fs.existsSync(packagePath)) {
+        return { output: { executed: false, executedBuild: false, status: 'not_executed', passed: null, reason: 'package.json is missing.' } };
       }
-
-      const astErrors = runTypeScriptAstDiagnostics(proj);
-      const pkg = proj.files.find((f) => f.path === 'package.json');
-      const indexHtml = proj.files.find((f) => f.path === 'index.html');
+      const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      if (!pkg.scripts?.build || typeof pkg.scripts.build !== 'string') {
+        return { output: { executed: false, executedBuild: false, status: 'not_executed', passed: null, reason: 'package.json has no build script.' } };
+      }
+      const binDir = path.join(root, 'node_modules', '.bin');
+      if (!fs.existsSync(binDir)) {
+        return { output: { executed: false, executedBuild: false, status: 'not_executed', passed: null, workspaceDependenciesInstalled: false, reason: 'Dependencies are not installed. Run install_dependencies first.' } };
+      }
+      const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+      const buildArgs = process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', 'run', 'build'] : ['run', 'build'];
+      const result = await runSandboxedProcess(command, buildArgs, root, {
+        timeoutMs: 180000,
+        abortSignal: ctx.abortSignal,
+      });
+      const candidates = ['dist/index.html', 'build/index.html', 'out/index.html', '.next/BUILD_ID'];
+      const artifacts = candidates.filter((rel) => fs.existsSync(path.join(root, rel)));
+      const hasFrontendArtifact = artifacts.includes('dist/index.html');
       const requiresFrontend = proj.projectClassification?.requires_frontend !== false;
-      const missing: string[] = [];
-      if (!pkg) missing.push('package.json');
-      if (requiresFrontend && !indexHtml) missing.push('index.html');
-
+      const passed = result.exitCode === 0 && (!requiresFrontend || hasFrontendArtifact);
       return {
         output: {
-          executed: false,
-          executedBuild: false,
-          status: 'preflight_only',
-          passed: null,
-          workspaceDependenciesInstalled: false,
-          preflightPassed: astErrors.length === 0 && missing.length === 0,
-          missingArtifacts: missing,
-          astErrors,
-          reason: 'Dependencies are not installed. Configuration and AST checks do not prove that the application builds.',
+          executed: true,
+          executedBuild: true,
+          status: passed ? 'built' : 'failed',
+          passed,
+          exitCode: result.exitCode,
+          buildScript: pkg.scripts.build,
+          artifacts,
+          previewReady: artifacts.includes('dist/index.html'),
+          reason: result.exitCode !== 0
+            ? 'The real npm build command failed.'
+            : requiresFrontend && !hasFrontendArtifact
+              ? 'Build command exited successfully but no static frontend entrypoint was produced.'
+              : undefined,
         },
-        stdout:
-          astErrors.length === 0 && missing.length === 0
-            ? 'Build preflight only: entrypoints and AST syntax inspected. No compiler/bundler was executed.'
-            : undefined,
-        stderr: [...missing.map((m) => `Missing ${m}`), ...astErrors].join('\n') || undefined,
+        stdout: result.stdout,
+        stderr: result.stderr,
       };
     },
   },
@@ -1278,21 +1338,112 @@ const registryEntries: RegisteredTool[] = [
     allowedAgents: ['ag_ceo', 'ag_arch', 'ag_qa', 'ag_sre'],
     availabilityCheck: async () => ({ available: true, configured: true }),
     execute: async (_args, ctx) => {
-      ensureWorkspaceSeeded(ctx.projectId);
+      const root = ensureWorkspaceSeeded(ctx.projectId);
       const proj = executionStore.getProject(ctx.projectId);
       if (!proj) throw new Error('Project not found');
       const astDiagnostics = runTypeScriptAstDiagnostics(proj);
       const audit = runAstAudit(proj, astDiagnostics);
-      return {
-        output: {
-          passed: audit.passed && audit.brokenReferences?.length === 0,
-          brokenReferences: audit.brokenReferences || [],
-          astErrors: audit.errors,
-          securityAlerts: audit.securityAlerts,
-          port3000Configured: audit.port3000Configured,
-        },
-        stdout: `Integration check finished: ${(audit.brokenReferences || []).length} broken route reference(s), ${audit.securityAlerts} security alert(s).`,
-      };
+      const indexPath = resolveSafeWorkspacePath(ctx.projectId, 'dist/index.html');
+      if (proj.projectClassification?.requires_frontend === false) {
+        return {
+          output: {
+            executed: false,
+            status: 'not_executed',
+            passed: null,
+            reason: 'Browser preview smoke test is not applicable to a headless project; add an explicit integration test script for its runtime.',
+            brokenReferences: audit.brokenReferences || [],
+            astErrors: audit.errors,
+          },
+        };
+      }
+      if (!fs.existsSync(indexPath)) {
+        return {
+          output: {
+            executed: false,
+            status: 'not_executed',
+            passed: null,
+            reason: 'No successful dist/index.html exists. The real build must finish before preview integration checks.',
+          },
+        };
+      }
+
+      if (process.env.NODE_ENV === 'test') {
+        // Unit-test harness: verify the real compiled HTML and referenced bundle
+        // without requiring a second Express listener on the test worker.
+        const html = fs.readFileSync(indexPath, 'utf8');
+        const assetMatch = html.match(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/i);
+        const assetPath = assetMatch?.[1]
+          ? assetMatch[1].replace(/^\/+/, '').split('?')[0]
+          : '';
+        const normalizedAssetPath = assetPath ? path.posix.normalize(assetPath) : '';
+        const assetExists = Boolean(
+          normalizedAssetPath &&
+          !normalizedAssetPath.startsWith('..') &&
+          fs.existsSync(resolveSafeWorkspacePath(ctx.projectId, `dist/${normalizedAssetPath}`))
+        );
+        const passed = html.includes('<') && assetExists && audit.errors.length === 0 &&
+          (audit.brokenReferences || []).length === 0;
+        return {
+          output: {
+            executed: true,
+            status: passed ? 'passed' : 'failed',
+            passed,
+            mode: 'test-filesystem-artifact-check',
+            checks: [
+              { name: 'built_html', passed: html.includes('<') },
+              { name: 'referenced_bundle', passed: assetExists },
+            ],
+            brokenReferences: audit.brokenReferences || [],
+            astErrors: audit.errors,
+          },
+          stdout: `Test harness artifact check ${passed ? 'passed' : 'failed'}; production still runs the HTTP preview smoke test.`,
+        };
+      }
+
+      const port = Number(process.env.PORT) || 3000;
+      const previewUrl = `http://127.0.0.1:${port}/preview/${encodeURIComponent(ctx.projectId)}/`;
+      const checks: Array<{ name: string; passed: boolean; status?: number; contentType?: string; error?: string }> = [];
+      try {
+        const page = await fetch(previewUrl, { signal: AbortSignal.timeout(10000) });
+        const html = await page.text();
+        const htmlOk = page.ok && /text\/html/i.test(page.headers.get('content-type') || '') && html.includes('<');
+        checks.push({ name: 'preview_html', passed: htmlOk, status: page.status, contentType: page.headers.get('content-type') || undefined });
+        if (!htmlOk) {
+          return { output: { executed: true, status: 'failed', passed: false, previewUrl, checks, reason: 'Preview route did not return a valid HTML document.' }, stderr: html.slice(0, 1000) };
+        }
+
+        const assetMatch = html.match(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/i);
+        if (assetMatch?.[1]) {
+          const assetUrl = new URL(assetMatch[1], previewUrl).toString();
+          const asset = await fetch(assetUrl, { signal: AbortSignal.timeout(10000) });
+          const assetBody = await asset.text();
+          const assetOk = asset.ok && assetBody.length > 0;
+          checks.push({ name: 'first_bundled_asset', passed: assetOk, status: asset.status, contentType: asset.headers.get('content-type') || undefined });
+        } else {
+          checks.push({ name: 'first_bundled_asset', passed: false, error: 'No local JavaScript or CSS bundle reference was found in preview HTML.' });
+        }
+
+        const passed = checks.every((check) => check.passed) && audit.errors.length === 0 && (audit.brokenReferences || []).length === 0;
+        return {
+          output: {
+            executed: true,
+            status: passed ? 'passed' : 'failed',
+            passed,
+            previewUrl,
+            checks,
+            brokenReferences: audit.brokenReferences || [],
+            astErrors: audit.errors,
+            securityAlerts: audit.securityAlerts,
+          },
+          stdout: `Preview integration smoke test ${passed ? 'passed' : 'failed'}: ${checks.map((check) => `${check.name}=${check.passed ? 'ok' : 'failed'}`).join(', ')}.`,
+          stderr: passed ? undefined : checks.filter((check) => !check.passed).map((check) => check.error || check.name).join('; '),
+        };
+      } catch (error: any) {
+        return {
+          output: { executed: true, status: 'failed', passed: false, previewUrl, checks, error: error?.message || String(error) },
+          stderr: error?.message || String(error),
+        };
+      }
     },
   },
   {

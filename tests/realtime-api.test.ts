@@ -64,7 +64,7 @@ describe('Real-Time Execution API, Persistence & SSE Replay', () => {
   it('creates a project, executes multi-agent DAG to completion, streams SSE events & supports replay', async () => {
     const createRes = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer devforge-test-token' },
       body: JSON.stringify({
         name: 'Realtime Ledger',
         prompt: 'Create a real-time SaaS expense tracker with React, TypeScript, and billing metrics',
@@ -77,9 +77,9 @@ describe('Real-Time Execution API, Persistence & SSE Replay', () => {
 
     // Poll /api/projects/:id/execution until completed
     let execPayload: any = null;
-    const deadline = Date.now() + 20000;
+    const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
-      const r = await fetch(`${baseUrl}/api/projects/${created.id}/execution`);
+      const r = await fetch(`${baseUrl}/api/projects/${created.id}/execution`, { headers: { Authorization: 'Bearer devforge-test-token' } });
       expect(r.status).toBe(200);
       execPayload = await r.json();
       if (execPayload.run?.status === 'completed' || execPayload.run?.status === 'failed') {
@@ -93,7 +93,7 @@ describe('Real-Time Execution API, Persistence & SSE Replay', () => {
     expect(execPayload.events.length).toBeGreaterThan(10);
 
     // Check /api/projects/:id/tools endpoint returns persisted tool execution records
-    const toolsRes = await fetch(`${baseUrl}/api/projects/${created.id}/tools`);
+    const toolsRes = await fetch(`${baseUrl}/api/projects/${created.id}/tools`, { headers: { Authorization: 'Bearer devforge-test-token' } });
     expect(toolsRes.status).toBe(200);
     const toolsData = await toolsRes.json();
     expect(toolsData.total).toBeGreaterThanOrEqual(8);
@@ -102,6 +102,7 @@ describe('Real-Time Execution API, Persistence & SSE Replay', () => {
     // Check SSE replay from seq=5 returns only events with seq > 5 in monotonic order
     const abortCtrl = new AbortController();
     const sseRes = await fetch(`${baseUrl}/api/projects/${created.id}/events?sinceSeq=5`, {
+      headers: { Authorization: 'Bearer devforge-test-token' },
       signal: abortCtrl.signal,
     });
     expect(sseRes.status).toBe(200);

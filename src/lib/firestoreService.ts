@@ -338,6 +338,82 @@ async function persistFirestoreProjectFiles(projectId: string, files: FileNode[]
   }
 }
 
+function stripUndefinedFirestoreValues(value: any): any {
+  if (Array.isArray(value)) return value.map(stripUndefinedFirestoreValues);
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, nested]) => nested !== undefined)
+        .map(([key, nested]) => [key, stripUndefinedFirestoreValues(nested)])
+    );
+  }
+  return value;
+}
+
+const persistedToolRecordSignatures = new Map<string, string>();
+
+async function persistFirestoreProjectRun(projectId: string, run: any): Promise<void> {
+  if (!run?.runId) return;
+  const { toolExecutions = [], ...runMetadata } = run;
+  const runRef = doc(db, 'projects', projectId, 'runs', run.runId);
+  await safeFirestoreSetDoc(runRef, stripUndefinedFirestoreValues({
+    ...runMetadata,
+    toolCount: toolExecutions.length,
+    updatedAt: new Date().toISOString(),
+  }), { merge: true });
+
+  const changedRecords: Array<{ executionId: string; key: string; signature: string; data: any }> = [];
+  for (const record of toolExecutions) {
+    const executionId = String(record.executionId || `tool_${changedRecords.length}`);
+    const inputArgs = { ...(record.inputArgs || {}) };
+    if (record.toolName === 'write_file' && typeof inputArgs.content === 'string') {
+      inputArgs.contentBytes = new TextEncoder().encode(inputArgs.content).length;
+      inputArgs.contentPersistedAsProjectFile = true;
+      delete inputArgs.content;
+    }
+    const data = stripUndefinedFirestoreValues({
+      ...record,
+      inputArgs,
+      projectId,
+      runId: run.runId,
+      updatedAt: new Date().toISOString(),
+    });
+    const key = `${projectId}:${run.runId}:${executionId}`;
+    const { updatedAt: _updatedAt, ...signatureData } = data;
+    const signature = JSON.stringify(signatureData);
+    if (persistedToolRecordSignatures.get(key) !== signature) {
+      changedRecords.push({ executionId, key, signature, data });
+    }
+  }
+
+  for (let offset = 0; offset < changedRecords.length; offset += FIRESTORE_BATCH_LIMIT) {
+    const batch = writeBatch(db);
+    const chunk = changedRecords.slice(offset, offset + FIRESTORE_BATCH_LIMIT);
+    for (const record of chunk) {
+      batch.set(
+        doc(db, 'projects', projectId, 'runs', run.runId, 'tools', encodeURIComponent(record.executionId)),
+        record.data,
+        { merge: true }
+      );
+    }
+    await batch.commit();
+    for (const record of chunk) persistedToolRecordSignatures.set(record.key, record.signature);
+  }
+}
+
+async function fetchFirestoreProjectRun(projectId: string, runId?: string): Promise<any | null> {
+  if (!runId) return null;
+  const runRef = doc(db, 'projects', projectId, 'runs', runId);
+  const runSnap = await getDoc(runRef);
+  if (!runSnap.exists()) return null;
+  const runData = runSnap.data();
+  const toolsSnap = await getDocs(collection(db, 'projects', projectId, 'runs', runId, 'tools'));
+  const toolExecutions = toolsSnap.docs
+    .map((toolDoc) => toolDoc.data())
+    .sort((a: any, b: any) => new Date(a.startedAt || a.timestamp || 0).getTime() - new Date(b.startedAt || b.timestamp || 0).getTime());
+  return { ...runData, toolExecutions };
+}
+
 export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]> => {
   const localList = getLocalStoredProjects(userId);
   if (isFirestoreQuotaExhausted()) return localList;
@@ -350,7 +426,8 @@ export const fetchFirestoreProjects = async (userId?: string): Promise<Project[]
       const data = d.data();
       const storedFiles = await fetchFirestoreProjectFiles(d.id).catch(() => []);
       const files = storedFiles.length > 0 ? storedFiles : (Array.isArray(data.files) ? data.files : []);
-      return { id: d.id, ...data, files } as Project;
+      const lastExecutionRun = await fetchFirestoreProjectRun(d.id, data.lastRunId);
+      return { id: d.id, ...data, files, lastExecutionRun: lastExecutionRun || data.lastExecutionRun } as Project;
     }));
 
     const map = new Map<string, Project>();
@@ -381,7 +458,8 @@ export const fetchFirestoreProjectById = async (projectId: string): Promise<Proj
     const data = snap.data();
     const storedFiles = await fetchFirestoreProjectFiles(projectId).catch(() => []);
     const files = storedFiles.length > 0 ? storedFiles : (Array.isArray(data.files) ? data.files : []);
-    const remote = { id: snap.id, ...data, files } as Project;
+    const lastExecutionRun = await fetchFirestoreProjectRun(snap.id, data.lastRunId);
+    const remote = { id: snap.id, ...data, files, lastExecutionRun: lastExecutionRun || data.lastExecutionRun } as Project;
     if (local && new Date(local.updatedAt || 0).getTime() > new Date(remote.updatedAt || 0).getTime()) return local;
     return remote;
   } catch (e: any) {
@@ -390,7 +468,11 @@ export const fetchFirestoreProjectById = async (projectId: string): Promise<Proj
   }
 };
 
-export const saveFirestoreProject = async (project: Project, userId?: string) => {
+export const saveFirestoreProject = async (
+  project: Project,
+  userId?: string,
+  options: { persistFiles?: boolean } = {}
+) => {
   // Keep a local recovery copy, but persist source files separately in Firestore so
   // large generated projects cannot exceed Firestore's 1 MiB document limit.
   saveLocalStoredProject(project, userId);
@@ -398,17 +480,19 @@ export const saveFirestoreProject = async (project: Project, userId?: string) =>
   if (!currentUid || isFirestoreQuotaExhausted()) return;
 
   try {
-    const { files = [], ...metadata } = project;
+    const { files = [], lastExecutionRun, ...metadata } = project;
     const docRef = doc(db, 'projects', project.id);
     const saved = await safeFirestoreSetDoc(docRef, {
       ...metadata,
       files: [],
       fileCount: files.filter((file) => file.type !== 'folder').length,
+      lastRunId: lastExecutionRun?.runId || metadata.lastRunId || null,
       userId: currentUid,
       updatedAt: new Date().toISOString(),
     }, { merge: true });
     if (!saved || isFirestoreQuotaExhausted()) return;
-    await persistFirestoreProjectFiles(project.id, files);
+    if (options.persistFiles !== false) await persistFirestoreProjectFiles(project.id, files);
+    if (lastExecutionRun?.runId) await persistFirestoreProjectRun(project.id, lastExecutionRun);
   } catch (e: any) {
     if (isQuotaExhaustedError(e)) markFirestoreQuotaExhausted();
     console.warn('[Firestore] Project/file persistence failed:', e?.message || e);

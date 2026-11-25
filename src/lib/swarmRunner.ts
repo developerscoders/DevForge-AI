@@ -102,9 +102,10 @@ export async function executeAutonomousSwarm(
 
     currentProject = snapshot.project;
     const run = snapshot.run;
+    const runningTaskAgentId = run?.tasks?.find((task) => task.status === 'running')?.agentId;
     const activeAgent =
-      currentProject.agents?.find((a) => a.status === 'active' || a.status === 'thinking') ||
-      currentProject.agents?.[0];
+      currentProject.agents?.find((agent) => ['active', 'thinking', 'healing'].includes(agent.status)) ||
+      (runningTaskAgentId ? currentProject.agents?.find((agent) => agent.id === runningTaskAgentId) : undefined);
 
     const percentage = computeRunProgress(currentProject, run);
 
@@ -112,10 +113,10 @@ export async function executeAutonomousSwarm(
       onProgress(
         {
           percentage,
-          activeAgentId: activeAgent?.id || 'ag_ceo',
-          activeAgentName: activeAgent?.name || 'Aria CEO',
-          activeAgentRole: activeAgent?.role || 'Executive Orchestrator',
-          currentTask: activeAgent?.currentTask || 'Executing orchestrator DAG',
+          activeAgentId: activeAgent?.id || (run?.status === 'completed' ? 'completed' : 'waiting'),
+          activeAgentName: activeAgent?.name || (run?.status === 'completed' ? 'Completed' : 'Waiting'),
+          activeAgentRole: activeAgent?.role || (run?.status === 'completed' ? 'All agents finished' : 'No active agent'),
+          currentTask: activeAgent?.currentTask || (run?.status === 'completed' ? 'All DAG tasks completed' : 'Waiting for a dependency-ready task'),
           stepDescription: run
             ? `DAG Tasks: ${run.metrics.completedTasks}/${run.metrics.totalTasks} · Tool Calls: ${run.metrics.totalToolCalls}`
             : 'Synchronizing with backend orchestrator',

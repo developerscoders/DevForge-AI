@@ -98,6 +98,7 @@ export default function ProjectView({
   const lastSeqRef = useRef<number>(0);
   const hasSavedCompleteRef = useRef<boolean>(false);
   const lastSavedFilesSnapshotRef = useRef<string>('');
+  const lastSavedRunSnapshotRef = useRef<string>('');
 
   // 1. Initial Load from Props, Firestore, or Server
   useEffect(() => {
@@ -162,7 +163,12 @@ export default function ProjectView({
   const refreshProjectData = async () => {
     if (!id) return;
     try {
-      const execRes = await fetch(`/api/projects/${id}/execution`);
+      const idToken = user ? await user.getIdToken() : '';
+      if (!idToken) throw new Error('Sign in to restore this project execution from Firestore.');
+      const execRes = await fetch(`/api/projects/${id}/execution`, {
+        headers: { Authorization: `Bearer ${idToken}` },
+        cache: 'no-store',
+      });
       if (execRes.ok) {
         const execData = await execRes.json();
         const data: Project = execData.project;
@@ -181,8 +187,13 @@ export default function ProjectView({
         }
         setPendingApprovals(approvals);
 
-        const activeAg = data.agents?.find((a) => a.status === 'active' || a.status === 'thinking') || data.agents?.[0];
-        if (activeAg) setCurrentActiveAgent(activeAg);
+        // Never fall back to agents[0]: that pins Aria as "currently executing"
+        // after her planning task has completed, even while another agent is working.
+        const runningAgentId = run?.tasks?.find((task) => task.status === 'running')?.agentId;
+        const activeAg =
+          data.agents?.find((agent) => ['active', 'thinking', 'healing'].includes(agent.status)) ||
+          (runningAgentId ? data.agents?.find((agent) => agent.id === runningAgentId) : undefined);
+        setCurrentActiveAgent(activeAg);
 
         setProject((prev) => {
           if (!prev) return data;
@@ -204,12 +215,15 @@ export default function ProjectView({
           content: file.content,
         })));
         const filesChanged = filesSnapshot !== lastSavedFilesSnapshotRef.current;
+        const runSnapshot = JSON.stringify(run || null);
+        const runChanged = runSnapshot !== lastSavedRunSnapshotRef.current;
         const statusChanged = Boolean(data.status && lastSavedStatusRef.current !== data.status);
         const completionChanged = allAgentsComplete && !hasSavedCompleteRef.current;
-        if (user && (statusChanged || completionChanged || filesChanged)) {
-          await saveFirestoreProject(data, user.uid);
+        if (user && (statusChanged || completionChanged || filesChanged || runChanged)) {
+          await saveFirestoreProject(data, user.uid, { persistFiles: filesChanged });
           lastSavedStatusRef.current = data.status;
           lastSavedFilesSnapshotRef.current = filesSnapshot;
+          lastSavedRunSnapshotRef.current = runSnapshot;
           if (allAgentsComplete) hasSavedCompleteRef.current = true;
           if (onProjectUpdated) onProjectUpdated(data);
         }
@@ -234,84 +248,96 @@ export default function ProjectView({
     }
   };
 
-  // Ordered SSE subscription with EventID deduplication and reconnect replay
+  // Authenticated SSE stream: fetch() is used instead of EventSource because
+  // EventSource cannot attach the Firebase Authorization header.
   useEffect(() => {
-    if (!id) return;
+    if (!id || !user) return;
     seenEventIdsRef.current = new Set();
     lastSeqRef.current = 0;
+    void refreshProjectData();
 
-    refreshProjectData();
-
-    let source: EventSource | null = null;
+    let disposed = false;
     let pollTimer: number | null = null;
+    let reconnectTimer: number | null = null;
+    const controller = new AbortController();
 
-    if (typeof EventSource !== 'undefined') {
-      source = new EventSource(`/api/projects/${id}/events?sinceSeq=${lastSeqRef.current}`);
-      const handleEvent = (raw: MessageEvent) => {
-        try {
-          const evt = JSON.parse(raw.data);
-          const dedupKey = evt.eventId || `${evt.seq}`;
-          if (seenEventIdsRef.current.has(dedupKey)) return;
-          seenEventIdsRef.current.add(dedupKey);
-          if (typeof evt.seq === 'number' && evt.seq > lastSeqRef.current) {
-            lastSeqRef.current = evt.seq;
-          }
-          // Refresh execution snapshot cleanly on state transitions or tool completions
-          if (
-            evt.type === 'run:started' ||
-            evt.type === 'run:completed' ||
-            evt.type === 'run:failed' ||
-            evt.type === 'run:cancelled' ||
-            evt.type === 'agent:status' ||
-            evt.type === 'task:updated' ||
-            evt.type === 'tool:completed' ||
-            evt.type === 'tool:failed' ||
-            evt.type === 'subagent:created' ||
-            evt.type === 'approval:requested' ||
-            evt.type === 'approval:resolved'
-          ) {
-            refreshProjectData();
-          }
-        } catch {
-          // Ignore malformed event frame
+    const handleEventData = (data: string) => {
+      try {
+        const evt = JSON.parse(data);
+        const dedupKey = evt.eventId || String(evt.seq);
+        if (seenEventIdsRef.current.has(dedupKey)) return;
+        seenEventIdsRef.current.add(dedupKey);
+        if (typeof evt.seq === 'number' && evt.seq > lastSeqRef.current) {
+          lastSeqRef.current = evt.seq;
         }
-      };
-
-      const eventTypes = [
-        'run:started',
-        'run:completed',
-        'run:failed',
-        'run:cancelled',
-        'task:created',
-        'task:updated',
-        'agent:status',
-        'subagent:created',
-        'agent:message',
-        'tool:pending',
-        'tool:running',
-        'tool:completed',
-        'tool:failed',
-        'approval:requested',
-        'approval:resolved',
-        'test:result',
-        'build:result',
-        'log:info',
-      ];
-      for (const evtType of eventTypes) {
-        source.addEventListener(evtType, handleEvent as EventListener);
+        if (
+          evt.type === 'run:started' ||
+          evt.type === 'run:completed' ||
+          evt.type === 'run:failed' ||
+          evt.type === 'run:cancelled' ||
+          evt.type === 'agent:status' ||
+          evt.type === 'task:updated' ||
+          evt.type === 'tool:completed' ||
+          evt.type === 'tool:failed' ||
+          evt.type === 'subagent:created' ||
+          evt.type === 'approval:requested' ||
+          evt.type === 'approval:resolved'
+        ) {
+          void refreshProjectData();
+        }
+      } catch {
+        // Ignore malformed or partial SSE frames.
       }
-      source.onmessage = handleEvent;
-    }
+    };
 
-    // Light safety polling only while execution is non-terminal
+    const connect = async () => {
+      try {
+        const idToken = await user.getIdToken();
+        const response = await fetch(
+          `/api/projects/${encodeURIComponent(id)}/events?sinceSeq=${lastSeqRef.current}`,
+          {
+            headers: { Authorization: `Bearer ${idToken}` },
+            cache: 'no-store',
+            signal: controller.signal,
+          }
+        );
+        if (!response.ok || !response.body) {
+          throw new Error(`Execution stream returned HTTP ${response.status}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!disposed) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split(/\r?\n\r?\n/);
+          buffer = frames.pop() || '';
+          for (const frame of frames) {
+            const dataLine = frame.split(/\r?\n/).find((line) => line.startsWith('data:'));
+            if (dataLine) handleEventData(dataLine.slice(5).trim());
+          }
+        }
+      } catch (error: any) {
+        if (!disposed && error?.name !== 'AbortError') {
+          console.warn('Authenticated execution stream disconnected; reconnecting:', error?.message || error);
+        }
+      } finally {
+        if (!disposed) {
+          reconnectTimer = window.setTimeout(() => void connect(), 1500);
+        }
+      }
+    };
+
+    void connect();
     pollTimer = window.setInterval(() => {
-      if (!isTerminalRef.current) {
-        refreshProjectData();
-      }
-    }, 3000);
+      if (!isTerminalRef.current) void refreshProjectData();
+    }, 5000);
 
     return () => {
-      if (source) source.close();
+      disposed = true;
+      controller.abort();
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (pollTimer !== null) window.clearInterval(pollTimer);
     };
   }, [id, user?.uid]);

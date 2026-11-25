@@ -56,11 +56,15 @@ export interface LLMResponse {
   isSimulated: boolean;
 }
 
+// Free-only fallback chain. Keep these IDs aligned with OpenRouter's live free catalog;
+// OpenRouter may rotate free capacity, so the final router is retained as a dynamic fallback.
 const DEFAULT_OPENROUTER_FALLBACKS = [
-  'deepseek/deepseek-chat-v3.1',
-  'qwen/qwen-2.5-coder-32b-instruct:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'deepseek/deepseek-chat:free',
+  'nvidia/nemotron-3.5-super-vl:free',
+  'recursive/flint-v1.0:free',
+  'particle-ai/particle-1:free',
+  'inclusionai/ling-3.2-flash:free',
+  'baidu/ernie-5.5-flash-preview:free',
+  'nvidia/nemotron-3.5-lightning:free',
   'openrouter/free',
 ];
 
@@ -101,48 +105,17 @@ export function getOpenRouterCandidateModels(
   requestedModel?: string,
   explicitFallbacks?: string[]
 ): string[] {
-  const req = requestedModel?.trim() || '';
-  const fallbacks = (explicitFallbacks && explicitFallbacks.length > 0)
-    ? explicitFallbacks
-    : DEFAULT_OPENROUTER_FALLBACKS;
-
-  const freeMapping: Record<string, string[]> = {
-    'openai/gpt-4o-mini': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
-    'openai/gpt-4o': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
-    'gpt-4o-mini': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
-    'anthropic/claude-3-haiku': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
-    'anthropic/claude-3.5-sonnet': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-r1:free', 'openrouter/free'],
-    'anthropic/claude-3-5-sonnet': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-r1:free', 'openrouter/free'],
-    'claude-3.5-sonnet': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-r1:free', 'openrouter/free'],
-    'deepseek/deepseek-r1': ['deepseek/deepseek-r1:free', 'deepseek/deepseek-chat:free', 'qwen/qwen-2.5-coder-32b-instruct:free'],
-    'deepseek-r1': ['deepseek/deepseek-r1:free', 'deepseek/deepseek-chat:free', 'qwen/qwen-2.5-coder-32b-instruct:free'],
-    'deepseek/deepseek-chat': ['deepseek/deepseek-chat:free', 'deepseek/deepseek-r1:free', 'meta-llama/llama-3.3-70b-instruct:free'],
-    'deepseek-chat': ['deepseek/deepseek-chat:free', 'meta-llama/llama-3.3-70b-instruct:free', 'openrouter/free'],
-    'qwen/qwen-2.5-coder-32b-instruct': ['qwen/qwen-2.5-coder-32b-instruct:free', 'meta-llama/llama-3.3-70b-instruct:free', 'openrouter/free'],
-    'meta-llama/llama-3.3-70b-instruct': ['meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'openrouter/free'],
-  };
-
-  if (!req || req === 'openrouter/free' || req === 'auto') {
-    return Array.from(new Set([...fallbacks, 'openrouter/free']));
-  }
-
-  // Exact roster or direct OpenRouter models: keep exact requested model at index 0,
-  // then append explicit/default fallback candidates.
-  if (
-    req === 'meta-llama/llama-3.2-1b-instruct' ||
-    req === 'deepseek/deepseek-chat-v3.1' ||
-    req.includes(':free') ||
-    req.includes('/')
-  ) {
-    const mapped = freeMapping[req] || [];
-    return Array.from(new Set([req, ...mapped, ...fallbacks]));
-  }
-
-  if (freeMapping[req]) {
-    return Array.from(new Set([...freeMapping[req], ...fallbacks]));
-  }
-
-  return Array.from(new Set([`${req}:free`, ...fallbacks]));
+  const requested = requestedModel?.trim() || '';
+  const isFree = (model: string) => model === 'openrouter/free' || model.endsWith(':free');
+  const primary = isFree(requested) ? requested : DEFAULT_OPENROUTER_FALLBACKS[0];
+  const configured = (explicitFallbacks || []).filter(isFree);
+  const candidates = [
+    primary,
+    ...configured,
+    ...DEFAULT_OPENROUTER_FALLBACKS,
+    'openrouter/free',
+  ];
+  return Array.from(new Set(candidates.filter(Boolean)));
 }
 
 export function classifyHttpFailure(status: number, bodyText = ''): {
@@ -427,7 +400,7 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     if (!key) {
       attempts.push({
         provider: 'openrouter',
-        model: model || 'meta-llama/llama-3.2-1b-instruct',
+        model: model || 'openrouter/free',
         errorType: 'unconfigured',
         error: 'OPENROUTER_API_KEY is not configured',
         latencyMs: 0,
@@ -579,8 +552,10 @@ export async function callMultiProviderLLM(options: LLMRequestOptions): Promise<
     }
   }
 
-  // 5. Cross-provider Gemini Core fallback (truthfully reports Gemini as actualProvider & actualModel!)
-  if (provider !== 'gemini') {
+  // 5. Cross-provider Gemini fallback is deliberately disabled for OpenRouter.
+  // DevForge's default swarm is free-only: an exhausted free route must fail visibly,
+  // never silently incur paid Gemini usage.
+  if (provider !== 'gemini' && provider !== 'openrouter') {
     const fallbackClient = options.geminiClientOverride || getGeminiClient();
     if (fallbackClient) {
       const fallbackGemModel = 'gemini-2.5-flash';
@@ -776,7 +751,7 @@ export function getProviderConfigStatus() {
       models: PROVIDER_MODEL_CATALOG.openrouter.map((m) => m.id),
       modelCatalog: PROVIDER_MODEL_CATALOG.openrouter,
       role: 'PRD, Architecture & Frontend Code Synthesis',
-      latencyEstimate: openrouterConfigured ? '350ms' : 'Fallback to Gemini',
+      latencyEstimate: openrouterConfigured ? '350ms' : 'Free-model routing unavailable (configure OPENROUTER_API_KEY)',
     },
     nvidia: {
       configured: nvidiaConfigured,
