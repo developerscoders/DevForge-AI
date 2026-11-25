@@ -90,6 +90,15 @@ export default function Navbar({ creditsRemaining, creditsTotal, planName }: Nav
 
           {/* User Balance Capsule & Firebase Auth */}
           <div className="flex items-center space-x-4" id="nav-balance">
+            <a
+              href="https://github.com/sponsors/developerscoders"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Sponsor DevForge AI on GitHub Sponsors (opens in a new tab)"
+              className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border border-pink-400/30 bg-pink-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-pink-200 transition hover:border-pink-300/70 hover:bg-pink-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pink-300 sm:px-3 sm:text-xs"
+            >
+              <span aria-hidden="true">♥</span><span>Sponsor</span>
+            </a>
             <div className="hidden lg:flex flex-col text-right">
               <span className="label text-[9px] text-slate-500">Credits Remaining</span>
               <span className="text-xs font-mono font-bold text-violet-400">

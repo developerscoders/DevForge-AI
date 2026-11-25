@@ -656,6 +656,37 @@ function AppContent() {
         {/* Fallback route to avoid blank screen on unmatched URLs */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+
+      <footer className="w-full border-t border-white/10 bg-[#070b16] px-5 py-10 mt-auto">
+        <div className="mx-auto flex max-w-7xl flex-col items-center gap-5 text-center">
+          <div>
+            <p className="text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-violet-400">Support independent development</p>
+            <h2 className="mt-2 text-xl font-bold text-white">Help keep DevForge growing.</h2>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">If DevForge helps you build, experiment or ship faster, consider supporting its creator through GitHub Sponsors.</p>
+          </div>
+          <a
+            href="https://github.com/sponsors/developerscoders"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Become a GitHub Sponsor of DevForge AI (opens in a new tab)"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-pink-500 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-pink-950/30 transition hover:bg-pink-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pink-300"
+          >
+            <span aria-hidden="true">♥</span> Sponsor DevForge AI
+          </a>
+          <div className="w-full max-w-[600px] overflow-hidden rounded-lg border border-white/10 bg-white">
+            <iframe
+              src="https://github.com/sponsors/developerscoders/card"
+              title="GitHub Sponsors membership options for developerscoders"
+              width="600"
+              height="225"
+              loading="lazy"
+              referrerPolicy="strict-origin-when-cross-origin"
+              className="block h-[225px] w-full border-0 bg-white"
+            />
+          </div>
+          <p className="text-xs text-slate-400">Prefer opening GitHub directly? <a href="https://github.com/sponsors/developerscoders" target="_blank" rel="noopener noreferrer" className="font-semibold text-violet-300 underline underline-offset-4 transition hover:text-white">View sponsorship options in a new tab</a>.</p>
+        </div>
+      </footer>
     </div>
   );
 }
