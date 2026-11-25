@@ -13,7 +13,7 @@ import { Project } from '../src/types.js';
 
 async function waitForCondition(
   predicate: () => boolean,
-  timeoutMs = 15000,
+  timeoutMs = 60000,
   intervalMs = 40
 ): Promise<void> {
   const start = Date.now();
@@ -88,7 +88,7 @@ describe('MultiAgentOrchestrator DAG, Subagents, Approvals, Cancellation & Recov
     await waitForCondition(() => {
       const latest = executionStore.getRun(run.runId);
       return latest?.status === 'completed' || latest?.status === 'failed';
-    }, 20000);
+    }, 60000);
 
     const finalRun = executionStore.getRun(run.runId)!;
     const finalProject = executionStore.getProject(project.id)!;

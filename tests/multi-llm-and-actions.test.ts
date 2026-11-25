@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG, PROVIDER_MODEL_CATALOG } from '../src/config/agentRoster.js';
+import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG, PROVIDER_MODEL_CATALOG, resolveFreeAgentModel } from '../src/config/agentRoster.js';
 import {
   callMultiProviderLLM,
   callStructuredLLMWithZod,
@@ -51,14 +51,26 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
     expect(AGENT_ROSTER.frank.provider).toBe('openrouter');
     expect(AGENT_ROSTER.frank.availability).toBe('verified');
     expect(AGENT_ROSTER.frank.defaultModel).toBe(DEFAULT_MODEL_CONFIG['Frontend Engineer']);
-    expect(AGENT_ROSTER.parker.defaultModel).toBe('meta-llama/llama-3.2-1b-instruct');
+    expect(AGENT_ROSTER.parker.defaultModel).toBe('inclusionai/ling-3.2-flash:free');
+    for (const agent of Object.values(AGENT_ROSTER)) {
+      expect(agent.provider).toBe('openrouter');
+      expect(agent.defaultModel === 'openrouter/free' || agent.defaultModel.endsWith(':free')).toBe(true);
+      expect(agent.fallbackModels.every((model) => model === 'openrouter/free' || model.endsWith(':free'))).toBe(true);
+    }
     expect(PROVIDER_MODEL_CATALOG.nvidia.every((m) => !m.available)).toBe(true);
   });
 
-  it('preserves requested small model first in candidate chain and caps token budget for 1B models', () => {
+  it('rejects stale paid-provider selections and resolves every agent to an explicit free OpenRouter model', () => {
+    expect(resolveFreeAgentModel('aria', 'gemini-2.5-flash')).toBe(AGENT_ROSTER.aria.defaultModel);
+    expect(resolveFreeAgentModel('quinn', 'openai/gpt-oss-20b')).toBe(AGENT_ROSTER.quinn.defaultModel);
+    expect(resolveFreeAgentModel('frank', 'recursive/flint-v1.0:free')).toBe('recursive/flint-v1.0:free');
+    expect(resolveFreeAgentModel('devon', 'openrouter/free')).toBe('openrouter/free');
+  });
+
+  it('rejects stale non-free model IDs and keeps the OpenRouter candidate chain free-only', () => {
     const candidates = getOpenRouterCandidateModels('meta-llama/llama-3.2-1b-instruct');
-    expect(candidates[0]).toBe('meta-llama/llama-3.2-1b-instruct');
-    expect(candidates.length).toBeGreaterThanOrEqual(3);
+    expect(candidates[0]).toBe('nvidia/nemotron-3.5-super-vl:free');
+    expect(candidates.every((model) => model === 'openrouter/free' || model.endsWith(':free'))).toBe(true);
     expect(getModelTokenBudget('meta-llama/llama-3.2-1b-instruct', 4096)).toBeLessThanOrEqual(1024);
   });
 
@@ -70,10 +82,10 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
       const body = JSON.parse(String(init?.body || '{}'));
       calledModels.push(body.model);
 
-      if (body.model === 'meta-llama/llama-3.2-1b-instruct') {
+      if (body.model === 'nvidia/nemotron-3.5-super-vl:free') {
         return new Response(JSON.stringify({ error: { message: 'rate limited' } }), { status: 429 });
       }
-      if (body.model === 'deepseek/deepseek-chat-v3.1') {
+      if (body.model === 'baidu/ernie-5.5-flash-preview:free') {
         return new Response(JSON.stringify({ choices: [{ message: { content: '   ' } }] }), { status: 200 });
       }
       return new Response(
@@ -87,19 +99,19 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
 
     const res = await callMultiProviderLLM({
       provider: 'openrouter',
-      model: 'meta-llama/llama-3.2-1b-instruct',
-      fallbackModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen-2.5-coder-32b-instruct:free'],
+      model: 'nvidia/nemotron-3.5-super-vl:free',
+      fallbackModels: ['baidu/ernie-5.5-flash-preview:free', 'particle-ai/particle-1:free'],
       prompt: 'Generate plan JSON',
       maxRetriesPerCandidate: 0,
       fetchImpl: mockFetch,
     });
 
-    expect(calledModels[0]).toBe('meta-llama/llama-3.2-1b-instruct');
-    expect(calledModels[1]).toBe('deepseek/deepseek-chat-v3.1');
-    expect(calledModels[2]).toBe('qwen/qwen-2.5-coder-32b-instruct:free');
-    expect(res.requestedModel).toBe('meta-llama/llama-3.2-1b-instruct');
+    expect(calledModels[0]).toBe('nvidia/nemotron-3.5-super-vl:free');
+    expect(calledModels[1]).toBe('baidu/ernie-5.5-flash-preview:free');
+    expect(calledModels[2]).toBe('particle-ai/particle-1:free');
+    expect(res.requestedModel).toBe('nvidia/nemotron-3.5-super-vl:free');
     expect(res.actualProvider).toBe('openrouter');
-    expect(res.actualModel).toBe('qwen/qwen-2.5-coder-32b-instruct:free');
+    expect(res.actualModel).toBe('particle-ai/particle-1:free');
     expect(res.usedFallback).toBe(true);
     expect(res.attempts).toHaveLength(3);
     expect(res.attempts[0].errorType).toBe('rate_limit');
@@ -107,38 +119,36 @@ describe('Multi-LLM Provider Resilience, Token Budgeting & Controlled Tool Actio
     expect(res.attempts[2].errorType).toBe('ok');
   });
 
-  it('falls back to Gemini truthfully when OpenRouter candidates all fail and GEMINI_API_KEY is configured', async () => {
+  it('never falls back to paid Gemini when free OpenRouter candidates all fail', async () => {
     process.env.OPENROUTER_API_KEY = 'sk-or-test-key-12345';
     process.env.GEMINI_API_KEY = 'AIzaTestKeyForUnitTestingOnly12345';
+    let geminiWasCalled = false;
 
-    const mockFetch: typeof fetch = async () => {
-      return new Response('unavailable', { status: 503 });
-    };
+    const mockFetch: typeof fetch = async () => new Response('unavailable', { status: 503 });
 
     const res = await callMultiProviderLLM({
       provider: 'openrouter',
-      model: 'deepseek/deepseek-chat-v3.1',
-      fallbackModels: ['qwen/qwen-2.5-coder-32b-instruct:free'],
+      model: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+      fallbackModels: ['recursive/flint-v1.0:free', 'openrouter/free'],
       prompt: 'Respond briefly',
       maxRetriesPerCandidate: 0,
       fetchImpl: mockFetch,
       geminiClientOverride: {
         models: {
-          generateContent: async () => ({
-            text: 'Gemini recovery response',
-            usageMetadata: { totalTokenCount: 55 },
-          }),
+          generateContent: async () => {
+            geminiWasCalled = true;
+            return { text: 'Paid fallback must not run' };
+          },
         },
       },
     });
 
-    expect(res.text).toBe('Gemini recovery response');
+    expect(geminiWasCalled).toBe(false);
+    expect(res.text).toBe('');
     expect(res.requestedProvider).toBe('openrouter');
-    expect(res.requestedModel).toBe('deepseek/deepseek-chat-v3.1');
-    expect(res.actualProvider).toBe('gemini');
-    expect(res.actualModel).toBe('gemini-2.5-flash');
-    expect(res.usedFallback).toBe(true);
-    expect(res.isSimulated).toBe(false);
+    expect(res.actualProvider).toBe('none');
+    expect(res.attempts.every((attempt) => attempt.provider !== 'gemini')).toBe(true);
+    expect(res.isSimulated).toBe(true);
   });
 
   it('retries callStructuredLLMWithZod once when initial output fails JSON/Zod validation', async () => {

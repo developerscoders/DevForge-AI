@@ -37,10 +37,14 @@ export default function LiveSwarmGenerationTracker({
 
   const run = executionRun || project.lastExecutionRun || null;
 
+  const runningTaskAgentId = run?.tasks?.find((task) => task.status === 'running')?.agentId;
   const currentAgent =
     activeAgent ||
-    project.agents?.find((a) => a.status === 'active' || a.status === 'thinking') ||
-    project.agents?.[0];
+    project.agents?.find((agent) => ['active', 'thinking', 'healing'].includes(agent.status)) ||
+    (runningTaskAgentId ? project.agents?.find((agent) => agent.id === runningTaskAgentId) : undefined);
+  const runCompleted = run?.status === 'completed';
+  const runFailed = run?.status === 'failed';
+  const runCancelled = run?.status === 'cancelled';
 
   const completedCount = run?.metrics?.completedTasks ?? (project.agents?.filter((a) => a.status === 'complete').length || 0);
   const totalCount = run?.metrics?.totalTasks ?? (project.agents?.length || 6);
@@ -75,13 +79,15 @@ export default function LiveSwarmGenerationTracker({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xs font-mono font-bold uppercase tracking-widest text-emerald-400">
+                <span className={`text-xs font-mono font-bold uppercase tracking-widest ${runFailed ? 'text-rose-400' : runCompleted ? 'text-emerald-400' : runCancelled ? 'text-slate-400' : 'text-emerald-400'}`}>
                   {run?.status === 'awaiting_approval'
                     ? 'Awaiting Human Approval'
-                    : run?.status === 'cancelled'
+                    : runCancelled
                     ? 'Execution Cancelled'
-                    : run?.status === 'failed'
+                    : runFailed
                     ? 'Execution Halted'
+                    : runCompleted
+                    ? 'Execution Complete'
                     : 'Orchestrator DAG Executing'}
                 </span>
                 {run && (
@@ -116,7 +122,7 @@ export default function LiveSwarmGenerationTracker({
           </div>
           <div className="flex justify-between text-[11px] text-slate-400 font-mono">
             <span>
-              Stage: {currentAgent?.name || 'Aria CEO'} ({completedCount}/{totalCount} DAG Tasks · {run?.metrics?.totalToolCalls || 0} Tool Calls)
+              Stage: {currentAgent?.name || (runCompleted ? 'Completed' : runFailed ? 'Failed' : 'Waiting')} ({completedCount}/{totalCount} DAG Tasks · {run?.metrics?.totalToolCalls || 0} Tool Calls)
             </span>
             <span>{project.files?.length || 0} Files Written</span>
           </div>
@@ -159,30 +165,44 @@ export default function LiveSwarmGenerationTracker({
             <div className="absolute top-0 right-0 w-32 h-32 bg-violet-600/10 rounded-full blur-2xl pointer-events-none" />
             <div className="flex items-center justify-between text-xs font-mono text-violet-400 mb-3">
               <span className="flex items-center gap-1.5 font-bold uppercase tracking-wider">
-                <Bot size={14} /> Currently Executing
+                <Bot size={14} /> {runCompleted ? 'Execution Complete' : runFailed ? 'Execution Failed' : runCancelled ? 'Execution Cancelled' : currentAgent ? 'Currently Executing' : 'Waiting for Agent'}
               </span>
               <span className="text-[10px] bg-violet-500/20 border border-violet-500/40 text-violet-300 px-2 py-0.5 rounded-full">
-                {currentAgent?.tier || 'Lead'} Tier
+                {currentAgent ? `${currentAgent.tier || 'Lead'} Tier` : runCompleted ? 'All agents complete' : 'No active agent'}
               </span>
             </div>
 
             <div className="flex items-center gap-3.5 mb-3">
-              <img
-                src={currentAgent?.avatar || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=80&fit=crop&q=60'}
-                alt={currentAgent?.name || 'Agent'}
-                className="w-12 h-12 rounded-xl object-cover border border-violet-400/40 shadow"
-              />
+              {currentAgent?.avatar ? (
+                <img
+                  src={currentAgent.avatar}
+                  alt={currentAgent.name}
+                  className="w-12 h-12 rounded-xl object-cover border border-violet-400/40 shadow"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center text-slate-400">
+                  {runCompleted ? <CheckCircle2 size={22} /> : runFailed ? <AlertTriangle size={22} /> : <Bot size={22} />}
+                </div>
+              )}
               <div>
                 <h3 className="text-base font-bold text-white">{currentAgent?.name || 'Swarm Lead'}</h3>
                 <p className="text-xs text-slate-400">{currentAgent?.role || 'Autonomous Engineer'}</p>
-                <span className="text-[10px] font-mono text-slate-500">{currentAgent?.modelUsed || currentAgent?.model || 'gemini-2.5-flash'}</span>
+                <span className="text-[10px] font-mono text-slate-500">{currentAgent?.modelUsed || currentAgent?.model || 'No model currently running'}</span>
               </div>
             </div>
 
             <div className="bg-[#0a0a0f] border border-white/5 rounded-xl p-3 flex items-start gap-2.5">
-              <Loader2 size={15} className="animate-spin text-emerald-400 shrink-0 mt-0.5" />
+              {currentAgent ? (
+                <Loader2 size={15} className="animate-spin text-emerald-400 shrink-0 mt-0.5" />
+              ) : runCompleted ? (
+                <CheckCircle2 size={15} className="text-emerald-400 shrink-0 mt-0.5" />
+              ) : runFailed ? (
+                <AlertTriangle size={15} className="text-rose-400 shrink-0 mt-0.5" />
+              ) : (
+                <Clock size={15} className="text-slate-400 shrink-0 mt-0.5" />
+              )}
               <div className="text-xs text-slate-300 font-mono leading-relaxed">
-                {currentAgent?.currentTask || 'Executing orchestrator DAG node...'}
+                {currentAgent?.currentTask || (runCompleted ? 'All scheduled agent tasks and verification steps have finished.' : runFailed ? 'Execution stopped. Review the failure diagnostics above.' : 'Waiting for the next dependency-ready task.')}
               </div>
             </div>
           </div>

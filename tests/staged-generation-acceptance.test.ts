@@ -12,7 +12,7 @@ import { Project } from '../src/types.js';
 
 async function waitForCondition(
   predicate: () => boolean,
-  timeoutMs = 20000,
+  timeoutMs = 60000,
   intervalMs = 40
 ): Promise<void> {
   const start = Date.now();

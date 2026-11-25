@@ -146,10 +146,12 @@ function AppContent() {
 
     let res: Response;
     try {
+      if (!user) throw new Error('Sign in with Firebase before creating a persistent project.');
+      const idToken = await user.getIdToken();
       res = await fetch('/api/projects', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptText, modelConfig, userId: user?.uid }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ prompt: promptText, modelConfig }),
       });
     } catch (fetchErr: any) {
       const msg = `Network error creating project: ${fetchErr?.message || 'Unable to reach orchestrator server'}`;

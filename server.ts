@@ -8,7 +8,7 @@ import { PaymentProviderRegistry } from './src/lib/payment-abstraction.js';
 import { db as firestoreDb, auth as firestoreAuth } from './src/lib/firebase.js';
 import { collection as firestoreCollection, getDocs as firestoreGetDocs, doc as firestoreDoc, getDoc as firestoreGetDoc, setDoc as firestoreSetDoc } from 'firebase/firestore';
 import { callMultiProviderLLM, getProviderConfigStatus } from './src/lib/multi-llm-provider.js';
-import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG } from './src/config/agentRoster.js';
+import { AGENT_ROSTER, DEFAULT_MODEL_CONFIG, normalizeFreeModelConfig } from './src/config/agentRoster.js';
 import { classifyProjectPrompt } from './src/config/outputContracts.js';
 import { generateFullProjectFiles } from './src/lib/projectFilesGenerator.js';
 import { pushProjectToGitHub, deployProjectToVercel, checkVercelDeploymentStatus, ensureProductionDeployFiles } from './src/lib/deployService.js';
@@ -21,6 +21,7 @@ import {
   delegateMilestoneWithFallback,
 } from './src/lib/ariaOrchestratorEngine.js';
 import { executionStore } from './src/lib/orchestrator/executionStore.js';
+import { loadOwnedProjectFromFirestore, verifyFirebaseIdToken } from './src/lib/server/firestoreProjectHydrator.js';
 import { eventBus } from './src/lib/orchestrator/eventBus.js';
 import {
   orchestratorEngine,
@@ -181,6 +182,7 @@ getActivePlans().catch(() => {});
 executionStore.ensureLoaded();
 db.projects.push(...executionStore.getAllProjects());
 const activeSreStreams: Record<string, any[]> = {};
+const firestoreHydratedProjectIds = new Set<string>();
 
 function findOrHydrateProject(projectId: string) {
   let proj = db.projects.find((p) => p.id === projectId);
@@ -192,6 +194,92 @@ function findOrHydrateProject(projectId: string) {
     }
   }
   return proj;
+}
+
+function getBearerToken(req: express.Request): string {
+  const header = String(req.headers.authorization || '');
+  return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+}
+
+async function findOrHydrateProjectForRequest(req: express.Request, projectId: string) {
+  const idToken = getBearerToken(req);
+  if (!idToken) throw new Error('AUTH_REQUIRED: Sign in to access this project.');
+  const user = await verifyFirebaseIdToken(idToken);
+  let local = findOrHydrateProject(projectId);
+
+  if (process.env.NODE_ENV === 'test' && local?.userId === user.uid) {
+    firestoreHydratedProjectIds.add(projectId);
+    return local;
+  }
+
+  if (firestoreHydratedProjectIds.has(projectId)) {
+    if (!local || !local.userId || local.userId !== user.uid) {
+      throw new Error('PROJECT_FORBIDDEN: This project does not belong to the authenticated Firebase user.');
+    }
+    return local;
+  }
+
+  try {
+    // Hydrate once per server instance even when an older executions.json snapshot
+    // exists. Cloud Run local state can be stale after a replacement instance starts.
+    const remote = await loadOwnedProjectFromFirestore(projectId, idToken);
+    if (!remote) {
+      if (local?.userId === user.uid) {
+        firestoreHydratedProjectIds.add(projectId);
+        return local;
+      }
+      return null;
+    }
+
+    remote.modelConfig = normalizeFreeModelConfig(remote.modelConfig || {});
+    if (remote.lastExecutionRun?.runId) {
+      const recoveredRun = { ...remote.lastExecutionRun };
+      if (recoveredRun.status === 'running' || recoveredRun.status === 'queued' || recoveredRun.status === 'awaiting_approval') {
+        const now = new Date().toISOString();
+        recoveredRun.status = 'failed';
+        recoveredRun.completedAt = now;
+        recoveredRun.recoveredFromRestart = true;
+        recoveredRun.error = 'Execution was interrupted when the previous server instance stopped. Rebuild to resume.';
+        for (const task of recoveredRun.tasks || []) {
+          if (['running', 'pending', 'blocked', 'awaiting_approval'].includes(task.status)) {
+            task.status = 'failed';
+            task.completedAt = now;
+            task.error = 'Interrupted by server instance restart';
+          }
+        }
+      }
+      executionStore.saveRun(recoveredRun);
+      remote.lastExecutionRun = recoveredRun;
+    }
+
+    executionStore.saveProject(remote);
+    const existingIndex = db.projects.findIndex((project: any) => project.id === projectId);
+    if (existingIndex >= 0) db.projects[existingIndex] = remote;
+    else db.projects.push(remote);
+    firestoreHydratedProjectIds.add(projectId);
+    return remote;
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    if (message.startsWith('PROJECT_FORBIDDEN')) throw error;
+    if (local?.userId === user.uid) {
+      // Firestore can be temporarily unavailable; keep an owned local snapshot
+      // usable, but the API still reports its persistence state through health logs.
+      console.warn('[Firestore hydration fallback]', message);
+      firestoreHydratedProjectIds.add(projectId);
+      return local;
+    }
+    throw error;
+  }
+}
+
+function sendProjectHydrationError(res: express.Response, error: any) {
+  const message = String(error?.message || error || 'Project hydration failed');
+  const status =
+    message.startsWith('AUTH_REQUIRED') || message.startsWith('AUTH_INVALID') ? 401 :
+    message.startsWith('PROJECT_FORBIDDEN') ? 403 :
+    message.startsWith('FIRESTORE_PERMISSION_DENIED') ? 503 :
+    message.startsWith('FIRESTORE_ADC_UNAVAILABLE') ? 503 : 500;
+  return res.status(status).json({ error: message, code: message.split(':')[0] || 'PROJECT_HYDRATION_FAILED' });
 }
 
 // Express Endpoints
@@ -213,14 +301,15 @@ app.get('/api/projects', (req, res) => {
   res.json(merged);
 });
 
-app.get('/api/projects/:id', (req, res) => {
-  const project = findOrHydrateProject(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Project not found in server memory', id: req.params.id });
-  const latestRun = executionStore.getLatestRunForProject(project.id);
-  res.json({
-    ...project,
-    lastExecutionRun: latestRun || project.lastExecutionRun,
-  });
+app.get('/api/projects/:id', async (req, res) => {
+  try {
+    const project = await findOrHydrateProjectForRequest(req, req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found in Firestore', id: req.params.id });
+    const latestRun = executionStore.getLatestRunForProject(project.id);
+    return res.json({ ...project, lastExecutionRun: latestRun || project.lastExecutionRun });
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
+  }
 });
 
 app.delete('/api/projects/:id', (req, res) => {
@@ -267,15 +356,14 @@ app.get('/api/projects/:id/files/:filePath(*)', (req, res) => {
 
 // Actual generated-app preview. The preview is served only from the isolated
 // workspace's Vite build output; no prompt-keyword demo or synthetic UI is used.
-app.get('/api/projects/:id/preview/status', (req, res) => {
+app.get('/api/projects/:id/preview/status', async (req, res) => {
   const projectId = req.params.id;
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) {
     return res.status(400).json({ success: false, status: 'invalid_project_id' });
   }
-  const project = findOrHydrateProject(projectId);
-  if (!project) return res.status(404).json({ success: false, status: 'project_not_found' });
-
   try {
+    const project = await findOrHydrateProjectForRequest(req, projectId);
+    if (!project) return res.status(404).json({ success: false, status: 'project_not_found' });
     ensureProjectWorkspaceDir(projectId);
     const indexPath = resolveSafeWorkspacePath(projectId, 'dist/index.html');
     const packagePath = resolveSafeWorkspacePath(projectId, 'package.json');
@@ -286,10 +374,14 @@ app.get('/api/projects/:id/preview/status', (req, res) => {
       previewUrl: hasBuild ? `/preview/${encodeURIComponent(projectId)}/` : null,
       filesCount: project.files?.length || 0,
       hasPackageJson: fs.existsSync(packagePath),
-      message: hasBuild ? 'Serving the actual generated Vite build.' : 'No successful dist/index.html exists yet. Run dependency installation (with approval) and the real build tool.',
+      message: hasBuild ? 'Serving the actual generated Vite build.' : 'No successful dist/index.html exists yet. Install dependencies and execute the real build before previewing.',
     });
   } catch (error: any) {
-    return res.status(400).json({ success: false, status: 'preview_error', error: error?.message || 'Preview path validation failed' });
+    const message = String(error?.message || error);
+    if (message.startsWith('AUTH_') || message.startsWith('PROJECT_FORBIDDEN') || message.startsWith('FIRESTORE_')) {
+      return sendProjectHydrationError(res, error);
+    }
+    return res.status(400).json({ success: false, status: 'preview_error', error: message || 'Preview path validation failed' });
   }
 });
 
@@ -315,7 +407,7 @@ app.get('/preview/:id', (req, res) => {
 app.get('/preview/:id/*', (req, res) => {
   const projectId = req.params.id;
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) return res.sendStatus(400);
-  const requested = String(req.params[0] || '').replace(/^\\/+/, '');
+  const requested = String(req.params[0] || '').replace(/^\/+/, '');
   try {
     const target = resolveSafeWorkspacePath(projectId, path.posix.join('dist', requested));
     if (fs.existsSync(target) && fs.statSync(target).isFile()) return res.sendFile(target);
@@ -518,6 +610,12 @@ app.get('/api/deploy/config', (req, res) => {
 // 2. Project Creation (Real Multi-Agent DAG Orchestrator + Tool Calling + Execution Persistence)
 app.post('/api/projects', async (req, res) => {
   const { prompt, modelConfig, requireApprovalForCriticalWrites, preApprovedCriticalTools } = req.body || {};
+  let authenticatedUser: { uid: string; email?: string };
+  try {
+    authenticatedUser = await verifyFirebaseIdToken(getBearerToken(req));
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
+  }
   if (typeof prompt !== 'string' || !prompt.trim()) {
     return res.status(400).json({ error: 'Prompt is required' });
   }
@@ -537,10 +635,10 @@ app.post('/api/projects', async (req, res) => {
       .replace(/[^a-zA-Z0-9\s-]/g, '')
       .trim() || 'Autonomous Application';
 
-  const resolvedModelConfig = {
+  const resolvedModelConfig = normalizeFreeModelConfig({
     ...DEFAULT_MODEL_CONFIG,
     ...(modelConfig && typeof modelConfig === 'object' ? modelConfig : {}),
-  };
+  });
 
   const initialProject: any = {
     id: projectId,
@@ -556,7 +654,7 @@ app.post('/api/projects', async (req, res) => {
     files: [],
     deployedUrl: `/preview/${projectId}`,
     agents: buildInitialAgentsForProject(projectId, resolvedModelConfig),
-    userId: req.body?.userId || undefined,
+    userId: authenticatedUser.uid,
   };
 
   executionStore.saveProject(initialProject);
@@ -804,46 +902,43 @@ app.post('/api/projects/:id/approvals/:approvalId/resolve', (req, res) => {
 });
 
 // 10. Full Execution Run Inspection Endpoint
-app.get('/api/projects/:id/execution', (req, res) => {
-  const project = findOrHydrateProject(req.params.id);
-  if (!project) {
-    return res.status(404).json({ error: 'Project not found' });
+app.get('/api/projects/:id/execution', async (req, res) => {
+  try {
+    const project = await findOrHydrateProjectForRequest(req, req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found in Firestore', id: req.params.id });
+    const run = executionStore.getLatestRunForProject(req.params.id) || project.lastExecutionRun || null;
+    const runs = executionStore.getRunsForProject(req.params.id);
+    const events = executionStore.getEvents(req.params.id, Number(req.query.sinceSeq || 0));
+    const pendingApprovals = (run?.approvals || []).filter((a) => a.status === 'pending');
+    return res.json({ project, run, runsCount: runs.length, events, pendingApprovals });
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
   }
-  const run = executionStore.getLatestRunForProject(req.params.id) || project.lastExecutionRun || null;
-  const runs = executionStore.getRunsForProject(req.params.id);
-  const events = executionStore.getEvents(req.params.id, Number(req.query.sinceSeq || 0));
-  const pendingApprovals = (run?.approvals || []).filter((a) => a.status === 'pending');
-
-  res.json({
-    project,
-    run,
-    runsCount: runs.length,
-    events,
-    pendingApprovals,
-  });
 });
 
 // 11. Project Tool Invocations & Registry Availability
 app.get('/api/projects/:id/tools', async (req, res) => {
-  const project = findOrHydrateProject(req.params.id);
-  if (!project) {
-    return res.status(404).json({ error: 'Project not found' });
+  try {
+    const project = await findOrHydrateProjectForRequest(req, req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found in Firestore' });
+    const run = executionStore.getLatestRunForProject(req.params.id) || project.lastExecutionRun;
+    const toolsStatus = await getAllToolsAvailabilityStatus();
+    const executions = run?.toolExecutions || [];
+    return res.json({ projectId: req.params.id, runId: run?.runId || null, total: executions.length, toolExecutions: executions, toolsStatus });
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
   }
-  const run = executionStore.getLatestRunForProject(req.params.id);
-  const toolsStatus = await getAllToolsAvailabilityStatus();
-  const executions = run?.toolExecutions || [];
-  res.json({
-    projectId: req.params.id,
-    runId: run?.runId || null,
-    total: executions.length,
-    toolExecutions: executions,
-    toolsStatus,
-  });
 });
 
 // 12. Real-Time Ordered SSE Stream (supports Last-Event-ID / ?sinceSeq= replay)
-app.get('/api/projects/:id/events', (req, res) => {
+app.get('/api/projects/:id/events', async (req, res) => {
   const projectId = req.params.id;
+  try {
+    const project = await findOrHydrateProjectForRequest(req, projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found in Firestore' });
+  } catch (error: any) {
+    return sendProjectHydrationError(res, error);
+  }
   const headerSeq = req.headers['last-event-id'] ? Number(req.headers['last-event-id']) : undefined;
   const querySeq = req.query.sinceSeq !== undefined ? Number(req.query.sinceSeq) : undefined;
   const sinceSeq = Number.isFinite(querySeq) ? querySeq! : Number.isFinite(headerSeq) ? headerSeq! : 0;
@@ -881,7 +976,7 @@ app.get('/api/system/providers', (_req, res) => {
       {
         id: 'gemini',
         name: status.gemini.name,
-        defaultModel: AGENT_ROSTER.aria.defaultModel,
+        defaultModel: null,
         availableModels: status.gemini.models,
         modelCatalog: status.gemini.modelCatalog,
         configured: status.gemini.configured,
@@ -892,18 +987,18 @@ app.get('/api/system/providers', (_req, res) => {
       {
         id: 'openrouter',
         name: status.openrouter.name,
-        defaultModel: AGENT_ROSTER.sophia.defaultModel,
+        defaultModel: AGENT_ROSTER.aria.defaultModel,
         availableModels: status.openrouter.models,
         modelCatalog: status.openrouter.modelCatalog,
         configured: status.openrouter.configured,
         available: status.openrouter.available,
         availabilityReason: status.openrouter.availabilityReason,
-        fallbackProvider: status.gemini.configured ? 'gemini' : null,
+        fallbackProvider: null,
       },
       {
         id: 'groq',
         name: status.groq.name,
-        defaultModel: AGENT_ROSTER.quinn.defaultModel,
+        defaultModel: null,
         availableModels: status.groq.models,
         modelCatalog: status.groq.modelCatalog,
         configured: status.groq.configured,

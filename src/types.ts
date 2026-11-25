@@ -359,6 +359,8 @@ export interface Project {
   deploymentCertificate?: DeploymentCertificate;
   selfHealingAttempts?: Record<number, number>;
   activeRunId?: string;
+  /** Firestore runs subcollection pointer; keeps execution snapshots out of the 1 MiB project document. */
+  lastRunId?: string | null;
   lastExecutionRun?: ExecutionRun;
 }
 

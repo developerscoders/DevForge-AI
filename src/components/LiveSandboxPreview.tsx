@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Download, Monitor, RefreshCw, Smartphone, Tablet, AlertTriangle, ExternalLink } from 'lucide-react';
 import { Project, Agent, AgentLog, ExecutionRun } from '../types';
 import LiveSwarmGenerationTracker from './LiveSwarmGenerationTracker';
+import { auth } from '../lib/firebase';
 
 interface LiveSandboxPreviewProps {
   project: Project;
@@ -52,7 +53,10 @@ export default function LiveSandboxPreview({
   const refreshPreviewStatus = useCallback(async (signal?: AbortSignal) => {
     setChecking(true);
     try {
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) throw new Error('Sign in to load the persisted project preview.');
       const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/preview/status`, {
+        headers: { Authorization: `Bearer ${idToken}` },
         cache: 'no-store',
         signal,
       });

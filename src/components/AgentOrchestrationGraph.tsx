@@ -41,7 +41,7 @@ import { motion, AnimatePresence } from 'motion/react';
 const defaultAgentPrompts: Record<string, { prompt: string; model: string; artifact: string }> = {
   'ag_ceo': {
     prompt: 'Runtime prompt loaded from agents/aria.md when the milestone is dispatched.',
-    model: `Google Gemini (${AGENT_ROSTER.aria.defaultModel} / ${AGENT_ROSTER.aria.fallbackModels.join(', ')})`,
+    model: `OpenRouter Free (${AGENT_ROSTER.aria.defaultModel})`,
     artifact: 'Milestone Work Orders, Self-Healing Interventions & Executive Deployment Certificate'
   },
   'ag_pm': {
@@ -61,12 +61,12 @@ const defaultAgentPrompts: Record<string, { prompt: string; model: string; artif
   },
   'ag_qa': {
     prompt: 'Runtime prompt loaded from agents/quinn.md when the milestone is dispatched.',
-    model: `Groq (${AGENT_ROSTER.quinn.defaultModel})`,
+    model: `OpenRouter Free (${AGENT_ROSTER.quinn.defaultModel})`,
     artifact: 'tests/app.test.ts (Real Assertions & Security Audit)'
   },
   'ag_sre': {
     prompt: 'Runtime prompt loaded from agents/devon.md when the milestone is dispatched.',
-    model: `Groq (${AGENT_ROSTER.devon.defaultModel})`,
+    model: `OpenRouter Free (${AGENT_ROSTER.devon.defaultModel})`,
     artifact: 'Dockerfile & docker-compose.yml (Port 3000 Ingress)'
   }
 };

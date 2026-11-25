@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig(() => {
   // Cloud Run / AI Studio previews are served behind a proxy that does not
@@ -23,6 +23,14 @@ export default defineConfig(() => {
     server: {
       hmr: disableHmr ? false : undefined,
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+    },
+    // The full DAG now installs, builds, and smoke-tests generated projects.
+    // Give these real integration tests enough time instead of timing out at 5 seconds.
+    test: {
+      testTimeout: 45000,
+      hookTimeout: 45000,
+      pool: 'forks',
+      fileParallelism: false,
     },
   };
 });
