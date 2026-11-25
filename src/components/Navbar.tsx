@@ -90,6 +90,14 @@ export default function Navbar({ creditsRemaining, creditsTotal, planName }: Nav
 
           {/* User Balance Capsule & Firebase Auth */}
           <div className="flex items-center space-x-4" id="nav-balance">
+            <iframe
+              src="https://github.com/sponsors/developerscoders/button"
+              title="Sponsor developerscoders"
+              width="114"
+              height="32"
+              loading="lazy"
+              className="hidden sm:block border-0 rounded-md"
+            />
             <div className="hidden lg:flex flex-col text-right">
               <span className="label text-[9px] text-slate-500">Credits Remaining</span>
               <span className="text-xs font-mono font-bold text-violet-400">

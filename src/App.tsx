@@ -654,6 +654,25 @@ function AppContent() {
         {/* Fallback route to avoid blank screen on unmatched URLs */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+
+      <footer className="w-full border-t border-white/10 bg-[#070b16] px-5 py-10 mt-auto">
+        <div className="mx-auto flex max-w-7xl flex-col items-center gap-5 text-center">
+          <div>
+            <p className="text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-violet-400">Support independent development</p>
+            <h2 className="mt-2 text-xl font-bold text-white">Help keep DevForge growing.</h2>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">If DevForge helps you build, experiment or ship faster, consider supporting its creator through GitHub Sponsors.</p>
+          </div>
+          <iframe
+            src="https://github.com/sponsors/developerscoders/card"
+            title="Sponsor developerscoders"
+            width="600"
+            height="225"
+            loading="lazy"
+            className="h-[225px] w-full max-w-[600px] rounded-lg border-0 bg-white"
+          />
+          <a href="https://github.com/sponsors/developerscoders" target="_blank" rel="noreferrer" className="text-xs font-semibold text-violet-300 transition hover:text-white">View GitHub Sponsors profile ↗</a>
+        </div>
+      </footer>
     </div>
   );
 }
