@@ -51,4 +51,8 @@ Thanks for considering a contribution.
 
 ## License and contributions
 
-The repository owner must add and select a project license before contributions can be clearly accepted under a defined inbound contribution license. Until the repository has a license and contribution terms, do not assume that public visibility grants reuse rights. See the README license section.
+DevForge AI is distributed under the Apache License, Version 2.0. By intentionally submitting a contribution for inclusion (for example, through a pull request), you agree that your contribution is submitted under the same Apache-2.0 terms, unless you clearly state otherwise in writing. This follows Section 5 of the license; it does not transfer ownership or copyright in your contribution to the project maintainer.
+
+You must have the legal right to submit the contribution and must not include code, assets, documentation or other material that you do not have permission to contribute. Preserve applicable copyright, license, patent, attribution and NOTICE information. Identify substantial third-party material and its license in the pull request. Do not submit secrets or confidential material.
+
+No separate Contributor License Agreement (CLA) or Developer Certificate of Origin (DCO) is currently required by this repository. The Apache-2.0 license does not grant permission to use DevForge AI's name or logo as a trademark. See the root [`LICENSE`](LICENSE) file for the complete license.
