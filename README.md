@@ -339,6 +339,8 @@ Please report vulnerabilities privately rather than publishing exploit details i
 
 ## License
 
-**A license has not yet been selected or added to this repository.** Until a license file is committed, the source code is not granted an open-source license and normal copyright restrictions apply. Please do not assume that public visibility means permission to reuse, modify, redistribute or commercially deploy the code.
+DevForge AI is licensed under the **Apache License, Version 2.0**. You may use, reproduce, modify, distribute, sublicense and use the project commercially, subject to the license terms. The license includes an express patent license from contributors and conditions for redistribution, including retaining required notices and marking modified files.
 
-The repository owner should select and add a license before advertising the project as open source. See the license discussion in the project documentation/maintainer decision.
+See the full text in [`LICENSE`](LICENSE) or read the [official Apache-2.0 text](https://www.apache.org/licenses/LICENSE-2.0). The license does not grant permission to use the DevForge name or logo as a trademark, and it does not relicense third-party components, models, datasets or services bundled or used by the project. Review their individual terms.
+
+SPDX identifier: `Apache-2.0`.
